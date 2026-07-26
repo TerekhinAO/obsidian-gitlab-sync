@@ -15,6 +15,7 @@ import type {
   GitLabBranch,
   GitLabCompareResult,
   GitLabPayloadWarning,
+  GitLabRequestDiagnostic,
   GitLabTreeItem,
 } from "./types";
 
@@ -42,6 +43,7 @@ export interface GitLabClientOptions {
   maxPayloadBytes?: number;
   payloadWarningBytes?: number;
   onPayloadWarning?: (warning: GitLabPayloadWarning) => void;
+  onRequest?: (diagnostic: GitLabRequestDiagnostic) => void | Promise<void>;
   sleep?: (milliseconds: number) => Promise<void>;
 }
 
@@ -52,16 +54,20 @@ export class GitLabClient {
   private readonly maxPayloadBytes: number;
   private readonly payloadWarningBytes: number;
   private readonly onPayloadWarning?: (warning: GitLabPayloadWarning) => void;
+  private readonly onRequest?: (diagnostic: GitLabRequestDiagnostic) => void | Promise<void>;
   private readonly sleep: (milliseconds: number) => Promise<void>;
+  private readonly baseUrl: string;
+  private readonly projectPath: string;
 
   constructor(
     private readonly settings: GitLabSyncSettings,
     private readonly token: string,
     options: GitLabClientOptions = {},
   ) {
-    const baseUrl = settings.gitlabBaseUrl.trim().replace(/\/+$/, "");
-    const projectId = encodeURIComponent(settings.projectPath);
-    this.apiBase = `${baseUrl}/api/v4/projects/${projectId}`;
+    this.baseUrl = settings.gitlabBaseUrl.trim().replace(/\/+$/, "");
+    this.projectPath = settings.projectPath.trim();
+    const projectId = encodeURIComponent(this.projectPath);
+    this.apiBase = `${this.baseUrl}/api/v4/projects/${projectId}`;
     this.maxTransientRetries = options.maxTransientRetries ?? 2;
     this.initialRetryDelayMs = options.initialRetryDelayMs ?? 250;
     this.maxPayloadBytes =
@@ -69,6 +75,7 @@ export class GitLabClient {
     this.payloadWarningBytes =
       options.payloadWarningBytes ?? DEFAULT_PAYLOAD_WARNING_BYTES;
     this.onPayloadWarning = options.onPayloadWarning;
+    this.onRequest = options.onRequest;
     this.sleep =
       options.sleep ??
       ((milliseconds: number) =>
@@ -176,7 +183,7 @@ export class GitLabClient {
 
     while (true) {
       const response = (await requestUrl({
-        url: `${this.apiBase}${path}`,
+        url: await this.requestUrl(path, options.method ?? "GET"),
         method: options.method ?? "GET",
         headers: this.headers(),
         body: options.body,
@@ -203,6 +210,19 @@ export class GitLabClient {
 
       throw this.toError(response);
     }
+  }
+
+  private async requestUrl(path: string, method: string): Promise<string> {
+    const url = `${this.apiBase}${path}`;
+    await this.onRequest?.({
+      method,
+      url,
+      path,
+      baseUrl: this.baseUrl,
+      projectPath: this.projectPath,
+      branch: this.settings.branch.trim(),
+    });
+    return url;
   }
 
   private headers(): Record<string, string> {

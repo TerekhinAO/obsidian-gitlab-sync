@@ -174,6 +174,7 @@ export class SyncManager {
     try {
       const data = await this.options.stateStore.load();
       const settings = this.validateSettings(this.options.settings ?? data.settings);
+      await this.logGitLabTarget("Adopt existing vault target", settings);
       const token = await this.readToken(settings);
       const client = this.createClient(settings, token);
       await client.validateAccess?.();
@@ -255,6 +256,7 @@ export class SyncManager {
       const data = await this.options.stateStore.load();
       this.validateInitialized(data);
       const settings = this.validateSettings(this.options.settings ?? data.settings);
+      await this.logGitLabTarget("Sync target", settings);
       const token = await this.readToken(settings);
       const client = this.createClient(settings, token);
 
@@ -546,6 +548,15 @@ export class SyncManager {
     return token.trim();
   }
 
+  private async logGitLabTarget(message: string, settings: GitLabSyncSettings): Promise<void> {
+    await this.options.logger?.info(message, {
+      gitlabBaseUrl: settings.gitlabBaseUrl,
+      projectPath: settings.projectPath,
+      branch: settings.branch,
+      apiProjectUrl: `${settings.gitlabBaseUrl}/api/v4/projects/${encodeURIComponent(settings.projectPath)}`,
+    });
+  }
+
   private async defaultGetToken(settings: GitLabSyncSettings): Promise<string | null> {
     const storage = (this.options.app as any)?.secretStorage;
     if (!storage?.getSecret) {
@@ -561,7 +572,11 @@ export class SyncManager {
   }
 
   private createClient(settings: GitLabSyncSettings, token: string): GitLabClientLike {
-    return this.options.createGitLabClient?.(settings, token) ?? new GitLabClient(settings, token);
+    return this.options.createGitLabClient?.(settings, token) ?? new GitLabClient(settings, token, {
+      onRequest: async (diagnostic) => {
+        await this.options.logger?.info("GitLab request", diagnostic);
+      },
+    });
   }
 
   private createRemoteDiffService(client: GitLabClientLike): RemoteDiffLike {

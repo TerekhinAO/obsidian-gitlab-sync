@@ -66,3 +66,12 @@ export interface GitLabPayloadWarning {
   warningBytes: number;
   maxBytes: number;
 }
+
+export interface GitLabRequestDiagnostic {
+  method: string;
+  url: string;
+  path: string;
+  baseUrl: string;
+  projectPath: string;
+  branch: string;
+}

@@ -58,6 +58,37 @@ describe("GitLabClient", () => {
     expect(fake.calls[0].url).not.toContain("glpat-test");
   });
 
+  it("emits safe request diagnostics without token data", async () => {
+    const diagnostics: unknown[] = [];
+    fake.queue({
+      status: 200,
+      json: { name: "main", can_push: true, commit: { id: "abc", parent_ids: [] } },
+    });
+
+    await new GitLabClient(
+      { ...settings, gitlabBaseUrl: "https://gitlab.com///", projectPath: "group/project" },
+      "glpat-test",
+      {
+        onRequest: (diagnostic) => {
+          diagnostics.push(diagnostic);
+        },
+      },
+    ).validateAccess();
+
+    expect(diagnostics).toEqual([
+      {
+        method: "GET",
+        url: "https://gitlab.com/api/v4/projects/group%2Fproject/repository/branches/main",
+        path: "/repository/branches/main",
+        baseUrl: "https://gitlab.com",
+        projectPath: "group/project",
+        branch: "main",
+      },
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toContain("glpat-test");
+    expect(JSON.stringify(diagnostics)).not.toContain("PRIVATE-TOKEN");
+  });
+
   it("follows repository tree pagination using X-Next-Page", async () => {
     fake.queue({
       status: 200,
