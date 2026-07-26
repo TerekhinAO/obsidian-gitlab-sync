@@ -486,6 +486,7 @@ function gitlabSettings(server: GitLabTestServer): GitLabSyncSettings {
     authorName: "Mobile User",
     authorEmail: "mobile@example.com",
     syncOnStartup: true,
+    syncOnForeground: true,
     showRibbonIcon: true,
     loggingEnabled: false,
   };

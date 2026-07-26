@@ -26,6 +26,7 @@ describe("StateStore", () => {
     expect(data.settings.branch).toBe("main");
     expect(data.settings.tokenSecretName).toBe("gitlab-gitless-sync-token");
     expect(data.settings.syncOnStartup).toBe(true);
+    expect(data.settings.syncOnForeground).toBe(true);
     expect(data.state.initialized).toBe(false);
     expect(data.state.lastSyncedCommitSha).toBeNull();
     expect(data.state.trackedFiles).toEqual({});

@@ -21,12 +21,14 @@ import type {
 
 export interface SyncResult {
   status: "success" | "conflict" | "error" | "already-running";
-  trigger: "startup" | "manual" | "audit";
+  trigger: SyncTrigger;
   message: string;
   commitSha?: string;
   recovered?: boolean;
   attempts?: number;
 }
+
+export type SyncTrigger = "startup" | "manual" | "audit" | "foreground";
 
 export interface ConflictFile {
   filePath: string;
@@ -219,7 +221,7 @@ export class SyncManager {
     }
   }
 
-  async sync(trigger: "startup" | "manual" | "audit"): Promise<SyncResult> {
+  async sync(trigger: SyncTrigger): Promise<SyncResult> {
     if (this.syncing) {
       this.options.notice?.("Sync already running");
       return { status: "already-running", message: "Sync already running", trigger };
@@ -236,7 +238,7 @@ export class SyncManager {
   }
 
   private async syncLocked(
-    trigger: "startup" | "manual" | "audit",
+    trigger: SyncTrigger,
     progress?: ProgressNotice,
   ): Promise<SyncResult> {
     try {
@@ -293,7 +295,7 @@ export class SyncManager {
   }
 
   private async planAndApply(input: {
-    trigger: "startup" | "manual" | "audit";
+    trigger: SyncTrigger;
     settings: GitLabSyncSettings;
     client: GitLabClientLike;
     firstRemoteSha: string;
@@ -424,7 +426,7 @@ export class SyncManager {
   }
 
   private async applyRemoteOnlyPlan(
-    trigger: "startup" | "manual" | "audit",
+    trigger: SyncTrigger,
     remoteSha: string,
     plan: SyncPlan,
     progress?: ProgressNotice,
@@ -491,7 +493,7 @@ export class SyncManager {
     dirtyEntries: Record<string, DirtyEntry>,
     trackedFiles: Record<string, TrackedFile>,
     ignoreMatcher: IgnoreMatcherLike,
-    trigger: "startup" | "manual" | "audit",
+    trigger: SyncTrigger,
   ): DirtyEntry[] {
     const entries = Object.values(dirtyEntries)
       .map((entry) => ({ ...entry, path: normalizePath(entry.path) }))
@@ -708,10 +710,14 @@ export class SyncManager {
     return visibleFiles.sort();
   }
 
-  private commitMessage(trigger: "startup" | "manual" | "audit"): string {
-    return trigger === "audit"
-      ? "Sync vault from iPhone audit"
-      : "Sync vault from iPhone";
+  private commitMessage(trigger: SyncTrigger): string {
+    if (trigger === "audit") {
+      return "Sync vault from iPhone audit";
+    }
+    if (trigger === "foreground") {
+      return "Sync vault from iPhone foreground";
+    }
+    return "Sync vault from iPhone";
   }
 
   private setProgress(progress: ProgressNotice | undefined, message: string): void {

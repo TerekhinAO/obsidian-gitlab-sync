@@ -28,6 +28,7 @@ const settings: GitLabSyncSettings = {
   authorName: "Mobile User",
   authorEmail: "mobile@example.com",
   syncOnStartup: true,
+  syncOnForeground: true,
   showRibbonIcon: true,
   loggingEnabled: false,
 };

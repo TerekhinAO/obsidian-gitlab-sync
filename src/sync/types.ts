@@ -20,6 +20,7 @@ export interface GitLabSyncSettings {
   authorName: string;
   authorEmail: string;
   syncOnStartup: boolean;
+  syncOnForeground: boolean;
   showRibbonIcon: boolean;
   loggingEnabled: boolean;
 }

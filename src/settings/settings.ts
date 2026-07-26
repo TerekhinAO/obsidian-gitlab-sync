@@ -10,6 +10,7 @@ export const DEFAULT_SETTINGS: GitLabSyncSettings = {
   authorName: "",
   authorEmail: "",
   syncOnStartup: true,
+  syncOnForeground: true,
   showRibbonIcon: true,
   loggingEnabled: false,
 };

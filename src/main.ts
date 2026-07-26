@@ -3,10 +3,12 @@ import { DEFAULT_STATE, type GitLabSyncSettings, type PluginData } from "./setti
 import GitLabSyncSettingsTab from "./settings/settings-tab";
 import Logger from "./logger";
 import { StateStore } from "./sync/state-store";
-import SyncManager, { type SyncResult } from "./sync/sync-manager";
+import SyncManager, { type SyncResult, type SyncTrigger } from "./sync/sync-manager";
 import { SyncStatusModal } from "./views/sync-status-modal";
 import { BootstrapService } from "./sync/bootstrap-service";
 import { GitLabClient } from "./gitlab/client";
+
+const FOREGROUND_SYNC_COOLDOWN_MS = 30_000;
 
 export default class GitLabGitlessSyncPlugin extends Plugin {
   settings: GitLabSyncSettings;
@@ -16,6 +18,8 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
   logger: Logger;
 
   syncRibbonIcon: HTMLElement | null = null;
+  private layoutReady = false;
+  private lastForegroundSyncAt: number | null = null;
 
   async onUserEnable() {
     if (!this.isConfigured()) {
@@ -28,7 +32,6 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
 
     this.logger = new Logger(this.app.vault, this.settings.loggingEnabled);
     await this.logger.init();
-    this.registerAppLifecycleDiagnostics();
 
     this.syncManager = new SyncManager({
       app: this.app,
@@ -40,11 +43,13 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
       createProgressNotice: (message) => new Notice(message, 0),
       notice: (message) => new Notice(message, 5000),
     });
+    this.registerAppLifecycleHandlers();
 
     this.addSettingTab(new GitLabSyncSettingsTab(this.app, this));
 
     this.app.workspace.onLayoutReady(async () => {
       this.syncManager.startEventsListener(this);
+      this.layoutReady = true;
 
       if (this.settings.showRibbonIcon) {
         this.showSyncRibbonIcon();
@@ -94,7 +99,7 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     await this.syncManager?.stopEventsListener();
   }
 
-  async sync(trigger: "startup" | "manual" | "audit" = "manual"): Promise<SyncResult | void> {
+  async sync(trigger: SyncTrigger = "manual"): Promise<SyncResult | void> {
     if (!this.isConfigured()) {
       new Notice("Sync plugin not configured");
       return;
@@ -186,10 +191,11 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     return token?.trim() || null;
   }
 
-  private registerAppLifecycleDiagnostics(): void {
+  private registerAppLifecycleHandlers(): void {
     if (typeof document !== "undefined") {
       this.registerDomEvent(document, "visibilitychange", (event) => {
         void this.logAppLifecycleEvent(event);
+        void this.syncOnForegroundIfNeeded();
       });
     }
 
@@ -210,5 +216,47 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
       hasFocus: typeof document === "undefined" ? null : document.hasFocus(),
       persisted: "persisted" in event ? Boolean((event as PageTransitionEvent).persisted) : null,
     });
+  }
+
+  private async syncOnForegroundIfNeeded(): Promise<void> {
+    const reason = this.foregroundSyncSkipReason();
+    if (reason) {
+      await this.logger.info("Foreground sync skipped", { reason });
+      return;
+    }
+
+    this.lastForegroundSyncAt = Date.now();
+    await this.logger.info("Foreground sync started", {
+      cooldownMs: FOREGROUND_SYNC_COOLDOWN_MS,
+    });
+    await this.sync("foreground");
+  }
+
+  private foregroundSyncSkipReason(): string | null {
+    if (typeof document === "undefined") {
+      return "document-unavailable";
+    }
+    if (document.visibilityState !== "visible" || document.hidden) {
+      return "not-visible";
+    }
+    if (!this.settings.syncOnForeground) {
+      return "setting-disabled";
+    }
+    if (!this.layoutReady) {
+      return "layout-not-ready";
+    }
+    if (!this.pluginData.state.initialized) {
+      return "vault-not-initialized";
+    }
+    if (this.syncManager.isSyncing()) {
+      return "sync-already-running";
+    }
+    if (
+      this.lastForegroundSyncAt !== null &&
+      Date.now() - this.lastForegroundSyncAt < FOREGROUND_SYNC_COOLDOWN_MS
+    ) {
+      return "cooldown";
+    }
+    return null;
   }
 }

@@ -209,6 +209,56 @@ describe("plugin lifecycle", () => {
     vi.unstubAllGlobals();
   });
 
+  it("syncs once when the mobile app returns to the foreground", async () => {
+    const documentTarget = new EventTarget() as Document;
+    Object.assign(documentTarget, {
+      visibilityState: "hidden",
+      hidden: true,
+      hasFocus: () => false,
+    });
+    const windowTarget = new EventTarget() as Window;
+    vi.stubGlobal("document", documentTarget);
+    vi.stubGlobal("window", windowTarget);
+    let layoutCallback!: () => Promise<void>;
+    const plugin = new TestPlugin(fakePluginData(), fakeApp((callback) => {
+      layoutCallback = callback as () => Promise<void>;
+    }));
+    vi.spyOn(SyncManager.prototype, "startEventsListener").mockImplementation(() => undefined);
+    vi.spyOn(SyncManager.prototype, "recoverIfNeeded").mockResolvedValue(false);
+    const sync = vi.spyOn(SyncManager.prototype, "sync").mockResolvedValue({
+      status: "success",
+      trigger: "foreground",
+      message: "ok",
+    });
+
+    await plugin.onload();
+    await layoutCallback();
+    sync.mockClear();
+
+    Object.assign(documentTarget, {
+      visibilityState: "visible",
+      hidden: false,
+      hasFocus: () => true,
+    });
+    const visibilityEvent = plugin.domEvents.find((event) => event.type === "visibilitychange");
+    expect(visibilityEvent).toBeDefined();
+    const callback = visibilityEvent!.callback;
+    if (typeof callback === "function") {
+      callback(new Event("visibilitychange"));
+      callback(new Event("visibilitychange"));
+    } else {
+      callback.handleEvent(new Event("visibilitychange"));
+      callback.handleEvent(new Event("visibilitychange"));
+    }
+
+    await vi.waitFor(() => {
+      expect(sync).toHaveBeenCalledTimes(1);
+      expect(sync).toHaveBeenCalledWith("foreground");
+    });
+
+    vi.unstubAllGlobals();
+  });
+
   it("status modal never displays the token secret value", () => {
     const modal = new SyncStatusModal(
       {
