@@ -8,7 +8,7 @@ describe("GitLab settings persistence", () => {
     const app = {
       secretStorage: new Map<string, string>(),
     };
-    app.secretStorage.set("gitlab-gitless-sync-token", "glpat-secret-value");
+    app.secretStorage.set("gitlab-gitless-sync-token", "glpat-test");
 
     const store = new StateStore({
       loadData: async () => null,
@@ -46,7 +46,7 @@ describe("GitLab settings persistence", () => {
     );
 
     await logger.info("request failed", {
-      headers: { "PRIVATE-TOKEN": "glpat-secret-value" },
+      headers: { "PRIVATE-TOKEN": "glpat-test" },
       nested: { password: "hidden", token: "hidden" },
       safe: "visible",
     });

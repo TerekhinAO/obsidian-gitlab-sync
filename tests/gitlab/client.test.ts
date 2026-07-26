@@ -47,15 +47,15 @@ describe("GitLabClient", () => {
       json: { name: "main", can_push: true, commit: { id: "abc", parent_ids: [] } },
     });
 
-    await new GitLabClient(settings, "glpat-secret-value").validateAccess();
+    await new GitLabClient(settings, "glpat-test").validateAccess();
 
     expect(fake.calls[0].url).toBe(
       "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/branches/main",
     );
     expect(fake.calls[0].headers).toMatchObject({
-      "PRIVATE-TOKEN": "glpat-secret-value",
+      "PRIVATE-TOKEN": "glpat-test",
     });
-    expect(fake.calls[0].url).not.toContain("glpat-secret-value");
+    expect(fake.calls[0].url).not.toContain("glpat-test");
   });
 
   it("follows repository tree pagination using X-Next-Page", async () => {
