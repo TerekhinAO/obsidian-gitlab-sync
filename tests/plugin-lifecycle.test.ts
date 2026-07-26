@@ -259,6 +259,59 @@ describe("plugin lifecycle", () => {
     vi.unstubAllGlobals();
   });
 
+  it("syncs once when enabled and the mobile app goes to the background", async () => {
+    const documentTarget = new EventTarget() as Document;
+    Object.assign(documentTarget, {
+      visibilityState: "visible",
+      hidden: false,
+      hasFocus: () => true,
+    });
+    const windowTarget = new EventTarget() as Window;
+    vi.stubGlobal("document", documentTarget);
+    vi.stubGlobal("window", windowTarget);
+    let layoutCallback!: () => Promise<void>;
+    const plugin = new TestPlugin(
+      fakePluginData({ settings: { syncOnBackground: true } }),
+      fakeApp((callback) => {
+        layoutCallback = callback as () => Promise<void>;
+      }),
+    );
+    vi.spyOn(SyncManager.prototype, "startEventsListener").mockImplementation(() => undefined);
+    vi.spyOn(SyncManager.prototype, "recoverIfNeeded").mockResolvedValue(false);
+    const sync = vi.spyOn(SyncManager.prototype, "sync").mockResolvedValue({
+      status: "success",
+      trigger: "background",
+      message: "ok",
+    });
+
+    await plugin.onload();
+    await layoutCallback();
+    sync.mockClear();
+
+    Object.assign(documentTarget, {
+      visibilityState: "hidden",
+      hidden: true,
+      hasFocus: () => false,
+    });
+    const visibilityEvent = plugin.domEvents.find((event) => event.type === "visibilitychange");
+    expect(visibilityEvent).toBeDefined();
+    const callback = visibilityEvent!.callback;
+    if (typeof callback === "function") {
+      callback(new Event("visibilitychange"));
+      callback(new Event("visibilitychange"));
+    } else {
+      callback.handleEvent(new Event("visibilitychange"));
+      callback.handleEvent(new Event("visibilitychange"));
+    }
+
+    await vi.waitFor(() => {
+      expect(sync).toHaveBeenCalledTimes(1);
+      expect(sync).toHaveBeenCalledWith("background");
+    });
+
+    vi.unstubAllGlobals();
+  });
+
   it("status modal never displays the token secret value", () => {
     const modal = new SyncStatusModal(
       {

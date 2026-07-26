@@ -28,7 +28,7 @@ export interface SyncResult {
   attempts?: number;
 }
 
-export type SyncTrigger = "startup" | "manual" | "audit" | "foreground";
+export type SyncTrigger = "startup" | "manual" | "audit" | "foreground" | "background";
 
 export interface ConflictFile {
   filePath: string;
@@ -716,6 +716,9 @@ export class SyncManager {
     }
     if (trigger === "foreground") {
       return "Sync vault from iPhone foreground";
+    }
+    if (trigger === "background") {
+      return "Sync vault from iPhone background";
     }
     return "Sync vault from iPhone";
   }

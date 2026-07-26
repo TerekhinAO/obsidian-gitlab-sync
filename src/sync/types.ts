@@ -21,6 +21,7 @@ export interface GitLabSyncSettings {
   authorEmail: string;
   syncOnStartup: boolean;
   syncOnForeground: boolean;
+  syncOnBackground: boolean;
   showRibbonIcon: boolean;
   loggingEnabled: boolean;
 }

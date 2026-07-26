@@ -9,6 +9,7 @@ import { BootstrapService } from "./sync/bootstrap-service";
 import { GitLabClient } from "./gitlab/client";
 
 const FOREGROUND_SYNC_COOLDOWN_MS = 30_000;
+const BACKGROUND_SYNC_COOLDOWN_MS = 30_000;
 
 export default class GitLabGitlessSyncPlugin extends Plugin {
   settings: GitLabSyncSettings;
@@ -20,6 +21,7 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
   syncRibbonIcon: HTMLElement | null = null;
   private layoutReady = false;
   private lastForegroundSyncAt: number | null = null;
+  private lastBackgroundSyncAt: number | null = null;
 
   async onUserEnable() {
     if (!this.isConfigured()) {
@@ -195,7 +197,7 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     if (typeof document !== "undefined") {
       this.registerDomEvent(document, "visibilitychange", (event) => {
         void this.logAppLifecycleEvent(event);
-        void this.syncOnForegroundIfNeeded();
+        void this.syncOnVisibilityChangeIfNeeded();
       });
     }
 
@@ -232,6 +234,34 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     await this.sync("foreground");
   }
 
+  private async syncOnVisibilityChangeIfNeeded(): Promise<void> {
+    if (typeof document === "undefined") {
+      await this.logger.info("Visibility sync skipped", { reason: "document-unavailable" });
+      return;
+    }
+
+    if (document.visibilityState === "hidden" || document.hidden) {
+      await this.syncOnBackgroundIfNeeded();
+      return;
+    }
+
+    await this.syncOnForegroundIfNeeded();
+  }
+
+  private async syncOnBackgroundIfNeeded(): Promise<void> {
+    const reason = this.backgroundSyncSkipReason();
+    if (reason) {
+      await this.logger.info("Background sync skipped", { reason });
+      return;
+    }
+
+    this.lastBackgroundSyncAt = Date.now();
+    await this.logger.info("Background sync started", {
+      cooldownMs: BACKGROUND_SYNC_COOLDOWN_MS,
+    });
+    await this.sync("background");
+  }
+
   private foregroundSyncSkipReason(): string | null {
     if (typeof document === "undefined") {
       return "document-unavailable";
@@ -254,6 +284,34 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     if (
       this.lastForegroundSyncAt !== null &&
       Date.now() - this.lastForegroundSyncAt < FOREGROUND_SYNC_COOLDOWN_MS
+    ) {
+      return "cooldown";
+    }
+    return null;
+  }
+
+  private backgroundSyncSkipReason(): string | null {
+    if (typeof document === "undefined") {
+      return "document-unavailable";
+    }
+    if (document.visibilityState !== "hidden" && !document.hidden) {
+      return "not-hidden";
+    }
+    if (!this.settings.syncOnBackground) {
+      return "setting-disabled";
+    }
+    if (!this.layoutReady) {
+      return "layout-not-ready";
+    }
+    if (!this.pluginData.state.initialized) {
+      return "vault-not-initialized";
+    }
+    if (this.syncManager.isSyncing()) {
+      return "sync-already-running";
+    }
+    if (
+      this.lastBackgroundSyncAt !== null &&
+      Date.now() - this.lastBackgroundSyncAt < BACKGROUND_SYNC_COOLDOWN_MS
     ) {
       return "cooldown";
     }

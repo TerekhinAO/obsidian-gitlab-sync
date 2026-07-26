@@ -143,6 +143,16 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Sync on app background")
+      .setDesc("Run one sync when Obsidian is sent to the background")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.syncOnBackground).onChange(async (value) => {
+          this.plugin.settings.syncOnBackground = value;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName("Initialize empty vault from GitLab")
       .setDesc("Import the configured branch into an empty vault")
       .addButton((button) =>
