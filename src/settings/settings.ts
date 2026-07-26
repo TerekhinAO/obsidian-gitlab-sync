@@ -1,35 +1,28 @@
-export interface GitHubSyncSettings {
-  firstSync: boolean;
-  githubToken: string;
-  githubOwner: string;
-  githubRepo: string;
-  githubBranch: string;
-  syncStrategy: "manual" | "interval";
-  syncInterval: number;
-  syncOnStartup: boolean;
-  syncConfigDir: boolean;
-  conflictHandling: "overwriteLocal" | "ask" | "overwriteRemote";
-  conflictViewMode: "default" | "unified" | "split";
-  showStatusBarItem: boolean;
-  showSyncRibbonButton: boolean;
-  showConflictsRibbonButton: boolean;
-  enableLogging: boolean;
-}
+import type { GitLabSyncSettings, LocalSyncState, PluginData } from "../sync/types";
 
-export const DEFAULT_SETTINGS: GitHubSyncSettings = {
-  firstSync: true,
-  githubToken: "",
-  githubOwner: "",
-  githubRepo: "",
-  githubBranch: "main",
-  syncStrategy: "manual",
-  syncInterval: 1,
-  syncOnStartup: false,
-  syncConfigDir: false,
-  conflictHandling: "ask",
-  conflictViewMode: "default",
-  showStatusBarItem: true,
-  showSyncRibbonButton: true,
-  showConflictsRibbonButton: true,
-  enableLogging: false,
+export type { GitLabSyncSettings, LocalSyncState, PluginData };
+
+export type GitHubSyncSettings = GitLabSyncSettings & Record<string, any>;
+
+export const DEFAULT_SETTINGS: GitLabSyncSettings = {
+  gitlabBaseUrl: "https://gitlab.com",
+  projectPath: "",
+  branch: "main",
+  tokenSecretName: "gitlab-gitless-sync-token",
+  authorName: "",
+  authorEmail: "",
+  syncOnStartup: true,
+  showRibbonIcon: true,
+  loggingEnabled: false,
+};
+
+export const DEFAULT_STATE: LocalSyncState = {
+  schemaVersion: 1,
+  initialized: false,
+  lastSyncedCommitSha: null,
+  trackedFiles: {},
+  dirtyEntries: {},
+  pendingTransaction: null,
+  lastSyncAt: null,
+  lastSyncResult: "never",
 };

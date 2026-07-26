@@ -2,11 +2,11 @@ import {
   EventRef,
   Plugin,
   WorkspaceLeaf,
-  normalizePath,
   Notice,
 } from "obsidian";
-import { GitHubSyncSettings, DEFAULT_SETTINGS } from "./settings/settings";
-import GitHubSyncSettingsTab from "./settings/tab";
+import { DEFAULT_STATE, GitHubSyncSettings, type PluginData } from "./settings/settings";
+import GitLabSyncSettingsTab from "./settings/settings-tab";
+import { StateStore } from "./sync/state-store";
 import SyncManager, { ConflictFile, ConflictResolution } from "./sync-manager";
 import Logger from "./logger";
 import {
@@ -14,8 +14,10 @@ import {
   CONFLICTS_RESOLUTION_VIEW_TYPE,
 } from "./views/conflicts-resolution/view";
 
-export default class GitHubSyncPlugin extends Plugin {
+export default class GitLabGitlessSyncPlugin extends Plugin {
   settings: GitHubSyncSettings;
+  pluginData: PluginData;
+  stateStore: StateStore;
   syncManager: SyncManager;
   logger: Logger;
 
@@ -42,10 +44,9 @@ export default class GitHubSyncPlugin extends Plugin {
 
   async onUserEnable() {
     if (
-      this.settings.githubToken === "" ||
-      this.settings.githubOwner === "" ||
-      this.settings.githubRepo === "" ||
-      this.settings.githubBranch === ""
+      this.settings.gitlabBaseUrl === "" ||
+      this.settings.projectPath === "" ||
+      this.settings.branch === ""
     ) {
       new Notice("Go to settings to configure syncing");
     }
@@ -80,7 +81,7 @@ export default class GitHubSyncPlugin extends Plugin {
   async onload() {
     await this.loadSettings();
 
-    this.logger = new Logger(this.app.vault, this.settings.enableLogging);
+    this.logger = new Logger(this.app.vault, this.settings.loggingEnabled);
     this.logger.init();
 
     this.registerView(
@@ -88,7 +89,7 @@ export default class GitHubSyncPlugin extends Plugin {
       (leaf) => new ConflictsResolutionView(leaf, this, this.conflicts),
     );
 
-    this.addSettingTab(new GitHubSyncSettingsTab(this.app, this));
+    this.addSettingTab(new GitLabSyncSettingsTab(this.app, this));
 
     this.syncManager = new SyncManager(
       this.app.vault,
@@ -97,10 +98,6 @@ export default class GitHubSyncPlugin extends Plugin {
       this.logger,
     );
     await this.syncManager.loadMetadata();
-
-    if (this.settings.syncStrategy == "interval") {
-      this.restartSyncInterval();
-    }
 
     this.app.workspace.onLayoutReady(async () => {
       // Create the events handling only after tha layout is ready to avoid
@@ -111,22 +108,18 @@ export default class GitHubSyncPlugin extends Plugin {
 
       // Load the ribbons after layout is ready so they're shown after the core
       // buttons
-      if (this.settings.showStatusBarItem) {
-        this.showStatusBarItem();
-      }
-
-      if (this.settings.showConflictsRibbonButton) {
-        this.showConflictsRibbonIcon();
-      }
-
-      if (this.settings.showSyncRibbonButton) {
+      if (this.settings.showRibbonIcon) {
         this.showSyncRibbonIcon();
+      }
+
+      if (this.settings.syncOnStartup && this.pluginData.state.initialized) {
+        await this.sync();
       }
     });
 
     this.addCommand({
       id: "sync-files",
-      name: "Sync with GitHub",
+      name: "Sync with GitLab",
       repeatable: false,
       icon: "refresh-cw",
       callback: this.sync.bind(this),
@@ -143,10 +136,9 @@ export default class GitHubSyncPlugin extends Plugin {
 
   async sync() {
     if (
-      this.settings.githubToken === "" ||
-      this.settings.githubOwner === "" ||
-      this.settings.githubRepo === "" ||
-      this.settings.githubBranch === ""
+      this.settings.gitlabBaseUrl === "" ||
+      this.settings.projectPath === "" ||
+      this.settings.branch === ""
     ) {
       new Notice("Sync plugin not configured");
       return;
@@ -223,7 +215,7 @@ export default class GitHubSyncPlugin extends Plugin {
       state = "Up to date";
     }
 
-    this.statusBarItem.setText(`GitHub: ${state}`);
+    this.statusBarItem.setText(`GitLab: ${state}`);
   }
 
   showSyncRibbonIcon() {
@@ -232,7 +224,7 @@ export default class GitHubSyncPlugin extends Plugin {
     }
     this.syncRibbonIcon = this.addRibbonIcon(
       "refresh-cw",
-      "Sync with GitHub",
+      "Sync with GitLab",
       this.sync.bind(this),
     );
   }
@@ -273,11 +265,14 @@ export default class GitHubSyncPlugin extends Plugin {
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.stateStore = new StateStore(this);
+    this.pluginData = await this.stateStore.load();
+    this.settings = this.pluginData.settings;
   }
 
   async saveSettings() {
-    await this.saveData(this.settings);
+    this.pluginData.settings = this.settings;
+    await this.stateStore.save(this.pluginData);
   }
 
   // Proxy methods from sync manager to ease handling the interval
@@ -299,8 +294,8 @@ export default class GitHubSyncPlugin extends Plugin {
   }
 
   async reset() {
-    this.settings = DEFAULT_SETTINGS;
-    this.saveSettings();
+    this.pluginData.state = { ...DEFAULT_STATE };
+    await this.saveSettings();
     await this.syncManager.resetMetadata();
   }
 }

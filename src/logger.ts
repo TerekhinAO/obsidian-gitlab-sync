@@ -1,6 +1,24 @@
 import { Vault, normalizePath } from "obsidian";
 
-export const LOG_FILE_NAME = "github-sync.log" as const;
+export const LOG_FILE_NAME = "gitlab-gitless-sync.log" as const;
+const REDACTED = "[REDACTED]";
+const SECRET_FIELD_PATTERN = /^(private-token|authorization|token|password)$/i;
+
+function redactSecrets(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactSecrets(entry));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+      key,
+      SECRET_FIELD_PATTERN.test(key) ? REDACTED : redactSecrets(entry),
+    ]),
+  );
+}
 
 export default class Logger {
   private logFile: string;
@@ -31,7 +49,7 @@ export default class Logger {
       timestamp: new Date().toISOString(),
       level,
       message,
-      additional_data: data,
+      additional_data: redactSecrets(data),
     };
 
     await this.vault.adapter.append(
