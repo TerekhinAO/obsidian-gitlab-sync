@@ -98,7 +98,7 @@ export class GitLabClient {
     let page = "1";
 
     while (page) {
-      const response = await this.request<GitLabTreeItem[]>(
+      const response = await this.requestJsonResponse<GitLabTreeItem[]>(
         `/repository/tree?ref=${encodeURIComponent(ref)}&recursive=true&per_page=100&page=${page}`,
       );
       tree.push(...response.json);
@@ -167,18 +167,33 @@ export class GitLabClient {
     path: string,
     options: Pick<RequestUrlOptions, "method" | "body"> = {},
   ): Promise<T> {
-    const response = await this.request<T>(path, options);
+    const response = await this.requestJsonResponse<T>(path, options);
     return response.json;
   }
 
   private async requestArrayBuffer(path: string): Promise<ArrayBuffer> {
-    const response = await this.request<ArrayBuffer>(path);
+    const response = await this.requestArrayBufferResponse(path);
     return response.arrayBuffer;
+  }
+
+  private async requestJsonResponse<T>(
+    path: string,
+    options: Pick<RequestUrlOptions, "method" | "body"> = {},
+  ): Promise<{ json: T; arrayBuffer: ArrayBuffer; headers?: Record<string, string> }> {
+    return await this.request(path, options, "json");
+  }
+
+  private async requestArrayBufferResponse(
+    path: string,
+    options: Pick<RequestUrlOptions, "method" | "body"> = {},
+  ): Promise<{ json: never; arrayBuffer: ArrayBuffer; headers?: Record<string, string> }> {
+    return await this.request(path, options, "arrayBuffer");
   }
 
   private async request<T>(
     path: string,
-    options: Pick<RequestUrlOptions, "method" | "body"> = {},
+    options: Pick<RequestUrlOptions, "method" | "body">,
+    responseType: "json" | "arrayBuffer",
   ): Promise<{ json: T; arrayBuffer: ArrayBuffer; headers?: Record<string, string> }> {
     let attempt = 0;
 
@@ -203,7 +218,9 @@ export class GitLabClient {
 
       if (response.status >= 200 && response.status < 300) {
         return {
-          json: this.safeJson<T>(response, method, url),
+          json: responseType === "json"
+            ? this.safeJson<T>(response, method, url)
+            : undefined as T,
           arrayBuffer: response.arrayBuffer as ArrayBuffer,
           headers: response.headers,
         };

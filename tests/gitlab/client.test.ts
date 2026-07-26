@@ -228,6 +228,23 @@ describe("GitLabClient", () => {
     });
   });
 
+  it("does not parse JSON for successful raw blob responses", async () => {
+    const response: any = {
+      status: 200,
+      arrayBuffer: arrayBufferFromText("Test note body"),
+    };
+    Object.defineProperty(response, "json", {
+      get: () => {
+        throw new SyntaxError('JSON Parse error: Unexpected identifier "Test"');
+      },
+    });
+    fake.queue(response);
+
+    await expect(new GitLabClient(settings, "token").getRawBlob("blob-sha")).resolves.toEqual(
+      arrayBufferFromText("Test note body"),
+    );
+  });
+
   it.each([
     [401, GitLabAuthenticationError],
     [403, GitLabForbiddenError],
