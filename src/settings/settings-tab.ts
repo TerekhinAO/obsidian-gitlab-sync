@@ -1,5 +1,6 @@
 import { App, Modal, Notice, PluginSettingTab, Setting, TextComponent } from "obsidian";
 import GitLabGitlessSyncPlugin from "../main";
+import type { LocalSyncState } from "../settings/settings";
 import { copyToClipboard } from "../utils";
 
 function secretStorage(app: App): {
@@ -7,6 +8,36 @@ function secretStorage(app: App): {
   setSecret?: (key: string, value: string) => Promise<void>;
 } {
   return (app as any).secretStorage ?? {};
+}
+
+export interface VaultSetupViewState {
+  initialized: boolean;
+  title: string;
+  description: string;
+  showSetupActions: boolean;
+  showResetAction: boolean;
+}
+
+export function vaultSetupViewState(state: LocalSyncState): VaultSetupViewState {
+  if (!state.initialized) {
+    return {
+      initialized: false,
+      title: "Choose vault setup",
+      description: "Initialize an empty vault from GitLab, or adopt the files already in this vault.",
+      showSetupActions: true,
+      showResetAction: false,
+    };
+  }
+
+  const dirtyCount = Object.keys(state.dirtyEntries).length;
+  const base = state.lastSyncedCommitSha?.slice(0, 8) ?? "unknown";
+  return {
+    initialized: true,
+    title: "Vault connected",
+    description: `Base commit ${base}. Local pending changes: ${dirtyCount}.`,
+    showSetupActions: false,
+    showResetAction: true,
+  };
 }
 
 export default class GitLabSyncSettingsTab extends PluginSettingTab {
@@ -120,6 +151,61 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
         }),
       );
 
+    new Setting(containerEl).setName("Vault setup").setHeading();
+
+    const setupState = vaultSetupViewState(this.plugin.pluginData.state);
+    const setupSetting = new Setting(containerEl)
+      .setName(setupState.title)
+      .setDesc(setupState.description);
+
+    if (setupState.showSetupActions) {
+      setupSetting
+        .addButton((button) =>
+          button.setButtonText("Initialize empty").onClick(async () => {
+            await this.plugin.initializeFromGitLab();
+            this.display();
+          }),
+        )
+        .addButton((button) =>
+          button.setButtonText("Adopt existing").onClick(async () => {
+            const confirmed = typeof window === "undefined" || window.confirm(
+              "This keeps current local files, records the GitLab branch as the sync base, and marks local differences for the next sync. Continue?",
+            );
+            if (confirmed) {
+              await this.plugin.adoptExistingVault();
+              this.display();
+            }
+          }),
+        );
+    }
+
+    if (setupState.showResetAction) {
+      new Setting(containerEl)
+        .setName("Reset local sync state")
+        .setDesc("Forget the local base commit, tracked index, dirty journal, and pending transaction")
+        .addButton((button) => {
+          button
+            .setButtonText("Reset")
+            .setWarning()
+            .onClick(() => {
+              const modal = new Modal(this.plugin.app);
+              modal.setTitle("Reset local sync state?");
+              modal.setContent("This does not delete files or change GitLab.");
+              new Setting(modal.contentEl).addButton((btn) =>
+                btn
+                  .setButtonText("Reset")
+                  .setWarning()
+                  .onClick(async () => {
+                    await this.plugin.reset();
+                    modal.close();
+                    this.display();
+                  }),
+              );
+              modal.open();
+            });
+        });
+    }
+
     new Setting(containerEl).setName("Sync").setHeading();
 
     new Setting(containerEl)
@@ -151,51 +237,6 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         }),
       );
-
-    new Setting(containerEl)
-      .setName("Initialize empty vault from GitLab")
-      .setDesc("Import the configured branch into an empty vault")
-      .addButton((button) =>
-        button.setButtonText("Initialize").onClick(() => this.plugin.initializeFromGitLab()),
-      );
-
-    new Setting(containerEl)
-      .setName("Adopt existing vault from GitLab")
-      .setDesc("Use the current GitLab branch as the sync base, then audit local differences")
-      .addButton((button) =>
-        button.setButtonText("Adopt").onClick(() => {
-          const confirmed = typeof window === "undefined" || window.confirm(
-            "This keeps current local files, records the GitLab branch as the sync base, and marks local differences for the next sync. Continue?",
-          );
-          if (confirmed) {
-            void this.plugin.adoptExistingVault();
-          }
-        }),
-      );
-
-    new Setting(containerEl)
-      .setName("Reset local sync state")
-      .setDesc("Forget the local base commit, tracked index, dirty journal, and pending transaction")
-      .addButton((button) => {
-        button
-          .setButtonText("Reset")
-          .setWarning()
-          .onClick(() => {
-            const modal = new Modal(this.plugin.app);
-            modal.setTitle("Reset local sync state?");
-            modal.setContent("This does not delete files or change GitLab.");
-            new Setting(modal.contentEl).addButton((btn) =>
-              btn
-                .setButtonText("Reset")
-                .setWarning()
-                .onClick(async () => {
-                  await this.plugin.reset();
-                  modal.close();
-                }),
-            );
-            modal.open();
-          });
-      });
 
     new Setting(containerEl).setName("Interface").setHeading();
 
