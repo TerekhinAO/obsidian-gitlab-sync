@@ -9,6 +9,7 @@
     "jsx": "react-jsx",
     "noImplicitAny": true,
     "moduleResolution": "node",
+    "resolveJsonModule": true,
     "importHelpers": true,
     "isolatedModules": true,
     "strictNullChecks": true,
