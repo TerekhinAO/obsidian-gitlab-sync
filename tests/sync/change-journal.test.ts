@@ -131,6 +131,7 @@ describe("ChangeJournal", () => {
     await journal.recordUpsert(".obsidian/plugins/gitlab-gitless-sync/main.js");
     await journal.recordUpsert(".obsidian/gitlab-gitless-sync.log");
     await journal.recordUpsert(".obsidian/github-sync-metadata.json");
+    await journal.recordUpsert(".git/config");
 
     expect(journal.list()).toEqual([]);
   });

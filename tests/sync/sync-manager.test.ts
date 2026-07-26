@@ -207,6 +207,44 @@ describe("SyncManager", () => {
     });
     expect(cannotPush.remoteDiff.discover).not.toHaveBeenCalled();
   });
+
+  it("adopts an existing vault by setting the GitLab head as base and auditing local differences", async () => {
+    const fixture = managerFixture({
+      data: pluginData({ initialized: false }),
+      remoteTree: [
+        { id: await gitBlobId("same"), name: "same.md", type: "blob", path: "same.md", mode: "100644" },
+        { id: await gitBlobId("remote"), name: "changed.md", type: "blob", path: "changed.md", mode: "100644" },
+        { id: await gitBlobId("missing"), name: "missing.md", type: "blob", path: "missing.md", mode: "100644" },
+      ],
+      localFiles: {
+        "same.md": "same",
+        "changed.md": "local",
+        "new.md": "new",
+        ".git/config": "ignored",
+      },
+    });
+
+    await expect(fixture.manager.adoptExistingVault()).resolves.toMatchObject({
+      status: "success",
+      commitSha: "remote-a",
+      dirtyPaths: 3,
+    });
+
+    const state = (await fixture.store.load()).state;
+    expect(state.initialized).toBe(true);
+    expect(state.lastSyncedCommitSha).toBe("remote-a");
+    expect(Object.keys(state.trackedFiles).sort()).toEqual([
+      "changed.md",
+      "missing.md",
+      "same.md",
+    ]);
+    expect(state.dirtyEntries).toMatchObject({
+      "changed.md": { path: "changed.md", operation: "upsert" },
+      "missing.md": { path: "missing.md", operation: "delete" },
+      "new.md": { path: "new.md", operation: "upsert" },
+    });
+    expect(state.dirtyEntries[".git/config"]).toBeUndefined();
+  });
 });
 
 function managerFixture(options: {
@@ -215,11 +253,23 @@ function managerFixture(options: {
   branchHeads?: string[];
   canPush?: boolean;
   remoteChanges?: RemoteChange[];
+  remoteTree?: any[];
+  localFiles?: Record<string, string>;
 }) {
   const events: string[] = [];
   const store = fakeStore(options.data, events);
   const journal = {
     list: vi.fn(() => Object.values(options.data.state.dirtyEntries)),
+    recordUpsert: vi.fn(async (path: string) => {
+      await store.update((data) => {
+        data.state.dirtyEntries[path] = { path, operation: "upsert", recordedAt: 1234 };
+      });
+    }),
+    recordDelete: vi.fn(async (path: string) => {
+      await store.update((data) => {
+        data.state.dirtyEntries[path] = { path, operation: "delete", recordedAt: 1234 };
+      });
+    }),
     suppress: async <T>(operation: () => Promise<T>) => operation(),
   };
   const materializer = {
@@ -251,6 +301,7 @@ function managerFixture(options: {
     validateAccess: vi.fn(async () => undefined),
     getRawBlob: vi.fn(async () => null),
     getRawFile: vi.fn(async () => null),
+    getTree: vi.fn(async () => options.remoteTree ?? []),
     createCommit: vi.fn(async () => commit("commit-a", ["remote-a"])),
   };
   const remoteDiff = {
@@ -298,12 +349,39 @@ function managerFixture(options: {
       createPlanner: () => planner,
       materializer,
       journal,
+      vault: fakeVault(options.localFiles ?? {}),
       now: () => 1234,
       nowDate: () => new Date("2026-07-26T20:15:00+03:00"),
       notice: (message) => notices.push(message),
     }),
     notices,
   };
+}
+
+function fakeVault(files: Record<string, string>) {
+  return {
+    configDir: ".obsidian",
+    adapter: {
+      list: async (dir: string) => {
+        const prefix = dir ? `${dir}/` : "";
+        const childFiles: string[] = [];
+        const childFolders = new Set<string>();
+        for (const path of Object.keys(files)) {
+          if (!path.startsWith(prefix)) continue;
+          const rest = path.slice(prefix.length);
+          const [first, ...remaining] = rest.split("/");
+          if (!first) continue;
+          if (remaining.length === 0) {
+            childFiles.push(path);
+          } else {
+            childFolders.add(`${prefix}${first}`);
+          }
+        }
+        return { files: childFiles.sort(), folders: [...childFolders].sort() };
+      },
+      readBinary: async (path: string) => new TextEncoder().encode(files[path]).buffer,
+    },
+  } as any;
 }
 
 function fakeStore(initial: PluginData, events: string[]) {
@@ -420,6 +498,16 @@ function tracked(text: string): TrackedFile {
 
 function base64(text: string): string {
   return Buffer.from(text).toString("base64");
+}
+
+async function gitBlobId(text: string): Promise<string> {
+  const bytes = new TextEncoder().encode(text);
+  const header = new TextEncoder().encode(`blob ${bytes.byteLength}\0`);
+  const payload = new Uint8Array(header.byteLength + bytes.byteLength);
+  payload.set(header, 0);
+  payload.set(bytes, header.byteLength);
+  const digest = await crypto.subtle.digest("SHA-1", payload);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function cloneData(data: PluginData): PluginData {

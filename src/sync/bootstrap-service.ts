@@ -256,7 +256,11 @@ export class BootstrapService {
   }
 
   private isHardExcluded(path: string): boolean {
-    return this.isActivePluginPath(path) || isMetadataPath(normalizePath(path));
+    const normalized = normalizePath(path);
+    return normalized === ".git" ||
+      normalized.startsWith(".git/") ||
+      this.isActivePluginPath(normalized) ||
+      isMetadataPath(normalized);
   }
 }
 

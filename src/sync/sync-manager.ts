@@ -1,6 +1,6 @@
 import { normalizePath, type App, type Plugin, type Vault } from "obsidian";
 import { GitLabClient } from "../gitlab/client";
-import type { CreatedGitLabCommit, GitLabBranch } from "../gitlab/types";
+import type { CreatedGitLabCommit, GitLabBranch, GitLabTreeItem } from "../gitlab/types";
 import type Logger from "../logger";
 import { ChangeJournal } from "./change-journal";
 import { IgnoreMatcher } from "./ignore-matcher";
@@ -44,6 +44,7 @@ interface GitLabClientLike {
   validateAccess?(): Promise<void>;
   getRawBlob(blobId: string): Promise<ArrayBuffer | null>;
   getRawFile(path: string, ref: string): Promise<ArrayBuffer | null>;
+  getTree(ref: string): Promise<GitLabTreeItem[]>;
   createCommit(input: {
     message: string;
     actions: SyncPlan["actions"];
@@ -155,6 +156,66 @@ export class SyncManager {
 
   async recoverIfNeeded(): Promise<boolean> {
     return await this.getMaterializer().recoverPendingTransaction();
+  }
+
+  async adoptExistingVault(): Promise<{
+    status: "success" | "error" | "already-running";
+    message: string;
+    commitSha?: string;
+    dirtyPaths?: number;
+  }> {
+    if (this.syncing) {
+      this.options.notice?.("Sync already running");
+      return { status: "already-running", message: "Sync already running" };
+    }
+
+    this.syncing = true;
+    const progress = this.options.createProgressNotice?.("Adopting existing vault…");
+    try {
+      const data = await this.options.stateStore.load();
+      const settings = this.validateSettings(this.options.settings ?? data.settings);
+      const token = await this.readToken(settings);
+      const client = this.createClient(settings, token);
+      await client.validateAccess?.();
+      const branch = await client.getBranch();
+      this.validateBranch(branch);
+      const trackedFiles = treeToTrackedFiles(
+        await client.getTree(branch.commit.id),
+        this.isHardExcluded.bind(this),
+      );
+
+      await this.options.stateStore.update((next) => {
+        next.state.initialized = true;
+        next.state.lastSyncedCommitSha = branch.commit.id;
+        next.state.trackedFiles = trackedFiles;
+        next.state.dirtyEntries = {};
+        next.state.pendingTransaction = null;
+        next.state.lastSyncAt = this.now();
+        next.state.lastSyncResult = "success";
+      });
+      await this.auditLocalChanges();
+      const adopted = await this.options.stateStore.load();
+      const dirtyPaths = Object.keys(adopted.state.dirtyEntries).length;
+      this.options.notice?.(
+        dirtyPaths === 0
+          ? "Existing vault adopted"
+          : `Existing vault adopted with ${dirtyPaths} local changes`,
+      );
+      return {
+        status: "success",
+        message: "Existing vault adopted",
+        commitSha: branch.commit.id,
+        dirtyPaths,
+      };
+    } catch (error) {
+      const message = errorMessage(error);
+      await this.options.logger?.error("Adopt existing vault failed", { message });
+      this.options.notice?.(`Error adopting existing vault. ${message}`);
+      return { status: "error", message };
+    } finally {
+      progress?.hide?.();
+      this.syncing = false;
+    }
   }
 
   async sync(trigger: "startup" | "manual" | "audit"): Promise<SyncResult> {
@@ -659,6 +720,8 @@ export class SyncManager {
     const configDir = normalizePath(vault.configDir);
     const runtimeDir = `${configDir}/plugins/gitlab-gitless-sync/`;
     return (
+      normalized === ".git" ||
+      normalized.startsWith(".git/") ||
       normalized === `${configDir}/gitlab-gitless-sync.log` ||
       isMetadataPath(normalized) ||
       normalized === `${configDir}/plugins/gitlab-gitless-sync` ||
@@ -681,6 +744,24 @@ function cloneTrackedFiles(
 ): Record<string, TrackedFile> {
   return Object.fromEntries(
     Object.entries(trackedFiles).map(([path, file]) => [path, { ...file }]),
+  );
+}
+
+function treeToTrackedFiles(
+  tree: GitLabTreeItem[],
+  isHardExcluded: (path: string) => boolean,
+): Record<string, TrackedFile> {
+  return Object.fromEntries(
+    tree
+      .filter((item) => item.type === "blob" && !isHardExcluded(normalizePath(item.path)))
+      .map((item) => [
+        normalizePath(item.path),
+        {
+          blobId: item.id,
+          mode: item.mode,
+          size: 0,
+        },
+      ]),
   );
 }
 

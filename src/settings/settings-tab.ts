@@ -136,7 +136,21 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
       .setName("Initialize empty vault from GitLab")
       .setDesc("Import the configured branch into an empty vault")
       .addButton((button) =>
-        button.setButtonText("Initialize").onClick(() => this.plugin.sync()),
+        button.setButtonText("Initialize").onClick(() => this.plugin.initializeFromGitLab()),
+      );
+
+    new Setting(containerEl)
+      .setName("Adopt existing vault from GitLab")
+      .setDesc("Use the current GitLab branch as the sync base, then audit local differences")
+      .addButton((button) =>
+        button.setButtonText("Adopt").onClick(() => {
+          const confirmed = typeof window === "undefined" || window.confirm(
+            "This keeps current local files, records the GitLab branch as the sync base, and marks local differences for the next sync. Continue?",
+          );
+          if (confirmed) {
+            void this.plugin.adoptExistingVault();
+          }
+        }),
       );
 
     new Setting(containerEl)

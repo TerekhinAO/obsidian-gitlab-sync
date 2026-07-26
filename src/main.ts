@@ -5,6 +5,8 @@ import Logger from "./logger";
 import { StateStore } from "./sync/state-store";
 import SyncManager, { type SyncResult } from "./sync/sync-manager";
 import { SyncStatusModal } from "./views/sync-status-modal";
+import { BootstrapService } from "./sync/bootstrap-service";
+import { GitLabClient } from "./gitlab/client";
 
 export default class GitLabGitlessSyncPlugin extends Plugin {
   settings: GitLabSyncSettings;
@@ -102,6 +104,38 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     return result;
   }
 
+  async initializeFromGitLab(): Promise<void> {
+    if (!this.isConfigured()) {
+      new Notice("Sync plugin not configured");
+      return;
+    }
+    const token = await this.readToken();
+    if (!token) {
+      new Notice("GitLab token is missing");
+      return;
+    }
+    const service = new BootstrapService({
+      vault: this.app.vault,
+      client: new GitLabClient(this.settings, token),
+      stateStore: this.stateStore,
+      journal: {
+        suppress: async (operation) => operation(),
+      },
+    });
+    await service.initialize();
+    this.pluginData = await this.stateStore.load();
+    new Notice("Vault initialized from GitLab");
+  }
+
+  async adoptExistingVault(): Promise<void> {
+    if (!this.isConfigured()) {
+      new Notice("Sync plugin not configured");
+      return;
+    }
+    await this.syncManager.adoptExistingVault();
+    this.pluginData = await this.stateStore.load();
+  }
+
   showSyncRibbonIcon() {
     if (this.syncRibbonIcon) {
       return;
@@ -140,5 +174,14 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
       this.settings.projectPath.trim() !== "" &&
       this.settings.branch.trim() !== ""
     );
+  }
+
+  private async readToken(): Promise<string | null> {
+    const storage = (this.app as any).secretStorage;
+    if (!storage?.getSecret) {
+      return null;
+    }
+    const token = await storage.getSecret(this.settings.tokenSecretName);
+    return token?.trim() || null;
   }
 }

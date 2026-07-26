@@ -124,5 +124,6 @@ describe("IgnoreMatcher", () => {
     expect(
       matcher.isIgnored(".obsidian/plugins/gitlab-gitless-sync/main.js", {}),
     ).toBe(true);
+    expect(matcher.isIgnored(".git/config", {})).toBe(true);
   });
 });

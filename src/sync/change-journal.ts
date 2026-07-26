@@ -137,6 +137,8 @@ export class ChangeJournal {
     const configDir = normalizePath(this.options.vault.configDir);
     const runtimeDir = `${configDir}/plugins/${this.pluginId}/`;
     return (
+      path === ".git" ||
+      path.startsWith(".git/") ||
       path === `${configDir}/gitlab-gitless-sync.log` ||
       isMetadataPath(path) ||
       path === `${configDir}/plugins/${this.pluginId}` ||
