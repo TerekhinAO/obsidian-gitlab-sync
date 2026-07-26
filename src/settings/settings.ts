@@ -2,8 +2,6 @@ import type { GitLabSyncSettings, LocalSyncState, PluginData } from "../sync/typ
 
 export type { GitLabSyncSettings, LocalSyncState, PluginData };
 
-export type GitHubSyncSettings = GitLabSyncSettings & Record<string, any>;
-
 export const DEFAULT_SETTINGS: GitLabSyncSettings = {
   gitlabBaseUrl: "https://gitlab.com",
   projectPath: "",

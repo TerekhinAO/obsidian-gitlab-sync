@@ -3,10 +3,8 @@ import { DEFAULT_STATE, type GitLabSyncSettings, type PluginData } from "./setti
 import GitLabSyncSettingsTab from "./settings/settings-tab";
 import Logger from "./logger";
 import { StateStore } from "./sync/state-store";
-import SyncManager, {
-  type ConflictResolution,
-  type SyncResult,
-} from "./sync/sync-manager";
+import SyncManager, { type SyncResult } from "./sync/sync-manager";
+import { SyncStatusModal } from "./views/sync-status-modal";
 
 export default class GitLabGitlessSyncPlugin extends Plugin {
   settings: GitLabSyncSettings;
@@ -16,7 +14,6 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
   logger: Logger;
 
   syncRibbonIcon: HTMLElement | null = null;
-  conflictsResolver: ((resolutions: ConflictResolution[]) => void) | null = null;
 
   async onUserEnable() {
     if (!this.isConfigured()) {
@@ -50,10 +47,9 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
         this.showSyncRibbonIcon();
       }
 
-      if (this.settings.syncOnStartup && this.pluginData.state.initialized) {
+      const recovered = await this.syncManager.recoverIfNeeded();
+      if (!recovered && this.settings.syncOnStartup && this.pluginData.state.initialized) {
         await this.sync("startup");
-      } else {
-        await this.syncManager.recoverIfNeeded();
       }
     });
 
@@ -70,7 +66,24 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
       name: "Full audit and sync",
       repeatable: false,
       icon: "scan-search",
-      callback: () => void this.sync("audit"),
+      callback: () => {
+        const confirmed = typeof window === "undefined" || window.confirm(
+          "Full audit scans local files and can be slow on mobile. Continue?",
+        );
+        if (confirmed) {
+          void this.sync("audit");
+        }
+      },
+    });
+
+    this.addCommand({
+      id: "show-gitlab-sync-status",
+      name: "Show GitLab sync status",
+      repeatable: false,
+      icon: "info",
+      callback: () => {
+        new SyncStatusModal(this.app, this.settings, this.pluginData.state).open();
+      },
     });
   }
 

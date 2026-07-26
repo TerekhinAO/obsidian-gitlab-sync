@@ -112,6 +112,116 @@ export class Notice {
   }
 }
 
+export class Plugin {
+  app: any;
+  manifest: any;
+
+  constructor(app?: any, manifest?: any) {
+    this.app = app;
+    this.manifest = manifest;
+  }
+
+  async loadData(): Promise<unknown> {
+    return null;
+  }
+
+  async saveData(_data: unknown): Promise<void> {}
+
+  addSettingTab(_tab: unknown): void {}
+
+  addCommand(_command: unknown): void {}
+
+  addRibbonIcon(_icon: string, _title: string, _callback: () => void): HTMLElement {
+    return { remove() {} } as HTMLElement;
+  }
+
+  registerInterval(_interval: unknown): void {}
+
+  registerEvent(_eventRef: EventRef): void {}
+}
+
+export class Modal {
+  titleEl = { setText: (_text: string) => undefined };
+  contentEl: any = {
+    rows: [] as Array<{ name?: string; desc?: string }>,
+    empty() {
+      this.rows = [];
+    },
+  };
+
+  constructor(public app: any) {}
+
+  open(): void {
+    this.onOpen();
+  }
+
+  close(): void {}
+
+  onOpen(): void {}
+
+  setTitle(text: string): void {
+    this.titleEl.setText(text);
+  }
+
+  setContent(text: string): void {
+    this.contentEl.text = text;
+  }
+}
+
+export class Setting {
+  private row: { name?: string; desc?: string };
+
+  constructor(private containerEl: any) {
+    this.row = {};
+    containerEl.rows?.push(this.row);
+  }
+
+  setName(name: string): this {
+    this.row.name = name;
+    return this;
+  }
+
+  setDesc(desc: string): this {
+    this.row.desc = desc;
+    return this;
+  }
+
+  setHeading(): this {
+    return this;
+  }
+
+  addText(_callback: (component: any) => void): this {
+    return this;
+  }
+
+  addToggle(_callback: (component: any) => void): this {
+    return this;
+  }
+
+  addButton(_callback: (component: any) => void): this {
+    return this;
+  }
+}
+
+export class PluginSettingTab {
+  containerEl: any = { empty() {} };
+
+  constructor(
+    public app: any,
+    public plugin: Plugin,
+  ) {}
+
+  display(): void {}
+}
+
+export class TextComponent {
+  inputEl = { type: "text" };
+}
+
+export class WorkspaceLeaf {}
+
+export type TAbstractFile = { path: string };
+
 interface RequestUrlParam {
   url: string;
   method?: string;

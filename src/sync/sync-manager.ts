@@ -6,6 +6,7 @@ import { ChangeJournal } from "./change-journal";
 import { IgnoreMatcher } from "./ignore-matcher";
 import { LocalMaterializer } from "./local-materializer";
 import { LocalSnapshotService, type VersionState } from "./local-snapshot";
+import { calculateGitBlobId } from "./conflict-resolver";
 import { RemoteDiffService, type RemoteChange } from "./remote-diff";
 import { StateStore } from "./state-store";
 import { SyncPlanner, type SyncPlan } from "./sync-planner";
@@ -89,6 +90,8 @@ interface JournalLike {
   start?(): void;
   stop?(): Promise<void>;
   list(): DirtyEntry[];
+  recordUpsert?(path: string): Promise<void>;
+  recordDelete?(path: string): Promise<void>;
   suppress<T>(operation: () => Promise<T>): Promise<T>;
 }
 
@@ -197,6 +200,10 @@ export class SyncManager {
       await client.validateAccess?.();
       const firstBranch = await client.getBranch();
       this.validateBranch(firstBranch);
+
+      if (trigger === "audit") {
+        await this.auditLocalChanges();
+      }
 
       this.setProgress(progress, "Finding remote changes…");
       const result = await this.planAndApply({
@@ -581,6 +588,48 @@ export class SyncManager {
         message: errorMessage(error),
       });
     }
+  }
+
+  private async auditLocalChanges(): Promise<void> {
+    if (!this.options.vault) {
+      return;
+    }
+    const data = await this.options.stateStore.load();
+    const ignoreMatcher = this.createIgnoreMatcher();
+    await ignoreMatcher.reload();
+    const localFiles = await this.listLocalFiles("");
+    const localSet = new Set(localFiles);
+    const journal = this.getJournal();
+
+    for (const [path, tracked] of Object.entries(data.state.trackedFiles)) {
+      if (!localSet.has(path)) {
+        await journal.recordDelete?.(path);
+        continue;
+      }
+      const bytes = new Uint8Array(await this.options.vault.adapter.readBinary(path));
+      if ((await calculateGitBlobId(bytes)) !== tracked.blobId) {
+        await journal.recordUpsert?.(path);
+      }
+    }
+
+    for (const path of localFiles) {
+      if (data.state.trackedFiles[path] || ignoreMatcher.isIgnored(path, data.state.trackedFiles)) {
+        continue;
+      }
+      await journal.recordUpsert?.(path);
+    }
+  }
+
+  private async listLocalFiles(dir: string): Promise<string[]> {
+    if (!this.options.vault) {
+      return [];
+    }
+    const { files, folders } = await this.options.vault.adapter.list(dir);
+    const visibleFiles = files.map((path) => normalizePath(path)).filter((path) => !this.isHardExcluded(path));
+    for (const folder of folders.map((path) => normalizePath(path)).filter((path) => !this.isHardExcluded(path))) {
+      visibleFiles.push(...(await this.listLocalFiles(folder)));
+    }
+    return visibleFiles.sort();
   }
 
   private commitMessage(trigger: "startup" | "manual" | "audit"): string {
