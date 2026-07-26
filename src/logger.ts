@@ -1,8 +1,22 @@
 import { Vault, normalizePath } from "obsidian";
 
 export const LOG_FILE_NAME = "gitlab-gitless-sync.log" as const;
+export type LogLevel = "off" | "error" | "info" | "debug";
+
 const REDACTED = "[REDACTED]";
 const SECRET_FIELD_PATTERN = /^(private-token|authorization|token|password)$/i;
+const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
+  off: 0,
+  error: 1,
+  info: 2,
+  debug: 3,
+};
+const ENTRY_LEVEL_PRIORITY: Record<"ERROR" | "WARN" | "INFO" | "DEBUG", number> = {
+  ERROR: 1,
+  WARN: 2,
+  INFO: 2,
+  DEBUG: 3,
+};
 
 function redactSecrets(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -25,7 +39,7 @@ export default class Logger {
 
   constructor(
     private vault: Vault,
-    private enabled: boolean,
+    private level: LogLevel,
   ) {
     this.logFile = normalizePath(`${vault.configDir}/${LOG_FILE_NAME}`);
   }
@@ -39,11 +53,11 @@ export default class Logger {
   }
 
   private async write(
-    level: string,
+    level: "ERROR" | "WARN" | "INFO" | "DEBUG",
     message: string,
     data?: any,
   ): Promise<void> {
-    if (!this.enabled) return;
+    if (LOG_LEVEL_PRIORITY[this.level] < ENTRY_LEVEL_PRIORITY[level]) return;
 
     const logEntry = {
       timestamp: new Date().toISOString(),
@@ -67,11 +81,19 @@ export default class Logger {
   }
 
   enable(): void {
-    this.enabled = true;
+    this.level = "debug";
   }
 
   disable(): void {
-    this.enabled = false;
+    this.level = "off";
+  }
+
+  setLevel(level: LogLevel): void {
+    this.level = level;
+  }
+
+  async debug(message: string, data?: any): Promise<void> {
+    await this.write("DEBUG", message, data);
   }
 
   async info(message: string, data?: any): Promise<void> {

@@ -164,7 +164,7 @@ describe("plugin lifecycle", () => {
     vi.stubGlobal("document", documentTarget);
     vi.stubGlobal("window", windowTarget);
     const plugin = new TestPlugin(
-      fakePluginData({ settings: { loggingEnabled: true } }),
+      fakePluginData({ settings: { loggingLevel: "debug", loggingEnabled: true } }),
       fakeApp((callback) => {
         void callback();
       }),
@@ -260,6 +260,66 @@ describe("plugin lifecycle", () => {
   });
 
   it("syncs once when enabled and the mobile app goes to the background", async () => {
+    let log = "";
+    const documentTarget = new EventTarget() as Document;
+    Object.assign(documentTarget, {
+      visibilityState: "visible",
+      hidden: false,
+      hasFocus: () => true,
+    });
+    const windowTarget = new EventTarget() as Window;
+    vi.stubGlobal("document", documentTarget);
+    vi.stubGlobal("window", windowTarget);
+    let layoutCallback!: () => Promise<void>;
+    const plugin = new TestPlugin(
+      fakePluginData({ settings: { loggingLevel: "info", syncOnBackground: true } }),
+      fakeApp((callback) => {
+        layoutCallback = callback as () => Promise<void>;
+      }),
+    );
+    vi.spyOn(SyncManager.prototype, "startEventsListener").mockImplementation(() => undefined);
+    vi.spyOn(SyncManager.prototype, "recoverIfNeeded").mockResolvedValue(false);
+    const sync = vi.spyOn(SyncManager.prototype, "sync").mockResolvedValue({
+      status: "success",
+      trigger: "background",
+      message: "ok",
+      commitSha: "commit-a",
+    });
+    plugin.app.vault.adapter.append = async (_path: string, value: string) => {
+      log += value;
+    };
+
+    await plugin.onload();
+    await layoutCallback();
+    sync.mockClear();
+
+    Object.assign(documentTarget, {
+      visibilityState: "hidden",
+      hidden: true,
+      hasFocus: () => false,
+    });
+    const visibilityEvent = plugin.domEvents.find((event) => event.type === "visibilitychange");
+    expect(visibilityEvent).toBeDefined();
+    const callback = visibilityEvent!.callback;
+    if (typeof callback === "function") {
+      callback(new Event("visibilitychange"));
+      callback(new Event("visibilitychange"));
+    } else {
+      callback.handleEvent(new Event("visibilitychange"));
+      callback.handleEvent(new Event("visibilitychange"));
+    }
+
+    await vi.waitFor(() => {
+      expect(sync).toHaveBeenCalledTimes(1);
+      expect(sync).toHaveBeenCalledWith("background");
+      expect(log).toContain('"message":"Background sync finished"');
+      expect(log).toContain('"commitSha":"commit-a"');
+    });
+
+    vi.unstubAllGlobals();
+  });
+
+  it("skips foreground sync shortly after a background sync", async () => {
     const documentTarget = new EventTarget() as Document;
     Object.assign(documentTarget, {
       visibilityState: "visible",
@@ -288,26 +348,34 @@ describe("plugin lifecycle", () => {
     await layoutCallback();
     sync.mockClear();
 
+    const visibilityEvent = plugin.domEvents.find((event) => event.type === "visibilitychange");
+    expect(visibilityEvent).toBeDefined();
+    const callback = visibilityEvent!.callback;
     Object.assign(documentTarget, {
       visibilityState: "hidden",
       hidden: true,
       hasFocus: () => false,
     });
-    const visibilityEvent = plugin.domEvents.find((event) => event.type === "visibilitychange");
-    expect(visibilityEvent).toBeDefined();
-    const callback = visibilityEvent!.callback;
     if (typeof callback === "function") {
-      callback(new Event("visibilitychange"));
       callback(new Event("visibilitychange"));
     } else {
       callback.handleEvent(new Event("visibilitychange"));
+    }
+    await vi.waitFor(() => expect(sync).toHaveBeenCalledWith("background"));
+
+    Object.assign(documentTarget, {
+      visibilityState: "visible",
+      hidden: false,
+      hasFocus: () => true,
+    });
+    if (typeof callback === "function") {
+      callback(new Event("visibilitychange"));
+    } else {
       callback.handleEvent(new Event("visibilitychange"));
     }
 
-    await vi.waitFor(() => {
-      expect(sync).toHaveBeenCalledTimes(1);
-      expect(sync).toHaveBeenCalledWith("background");
-    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sync).toHaveBeenCalledTimes(1);
 
     vi.unstubAllGlobals();
   });

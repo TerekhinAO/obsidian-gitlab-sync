@@ -10,6 +10,7 @@ import { GitLabClient } from "./gitlab/client";
 
 const FOREGROUND_SYNC_COOLDOWN_MS = 30_000;
 const BACKGROUND_SYNC_COOLDOWN_MS = 30_000;
+const AUTO_SYNC_COOLDOWN_MS = 30_000;
 
 export default class GitLabGitlessSyncPlugin extends Plugin {
   settings: GitLabSyncSettings;
@@ -22,6 +23,8 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
   private layoutReady = false;
   private lastForegroundSyncAt: number | null = null;
   private lastBackgroundSyncAt: number | null = null;
+  private lastAutoSyncAt: number | null = null;
+  private lastAutoSyncTrigger: "foreground" | "background" | null = null;
 
   async onUserEnable() {
     if (!this.isConfigured()) {
@@ -32,7 +35,7 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
   async onload() {
     await this.loadSettings();
 
-    this.logger = new Logger(this.app.vault, this.settings.loggingEnabled);
+    this.logger = new Logger(this.app.vault, this.settings.loggingLevel);
     await this.logger.init();
 
     this.syncManager = new SyncManager({
@@ -211,7 +214,7 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
   }
 
   private async logAppLifecycleEvent(event: Event): Promise<void> {
-    await this.logger.info("App lifecycle event", {
+    await this.logger.debug("App lifecycle event", {
       event: event.type,
       visibilityState: typeof document === "undefined" ? null : document.visibilityState,
       documentHidden: typeof document === "undefined" ? null : document.hidden,
@@ -223,20 +226,21 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
   private async syncOnForegroundIfNeeded(): Promise<void> {
     const reason = this.foregroundSyncSkipReason();
     if (reason) {
-      await this.logger.info("Foreground sync skipped", { reason });
+      await this.logger.debug("Foreground sync skipped", { reason });
       return;
     }
 
     this.lastForegroundSyncAt = Date.now();
+    this.rememberAutoSync("foreground");
     await this.logger.info("Foreground sync started", {
       cooldownMs: FOREGROUND_SYNC_COOLDOWN_MS,
     });
-    await this.sync("foreground");
+    await this.logAutoSyncResult("Foreground", await this.sync("foreground"));
   }
 
   private async syncOnVisibilityChangeIfNeeded(): Promise<void> {
     if (typeof document === "undefined") {
-      await this.logger.info("Visibility sync skipped", { reason: "document-unavailable" });
+      await this.logger.debug("Visibility sync skipped", { reason: "document-unavailable" });
       return;
     }
 
@@ -251,15 +255,16 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
   private async syncOnBackgroundIfNeeded(): Promise<void> {
     const reason = this.backgroundSyncSkipReason();
     if (reason) {
-      await this.logger.info("Background sync skipped", { reason });
+      await this.logger.debug("Background sync skipped", { reason });
       return;
     }
 
     this.lastBackgroundSyncAt = Date.now();
+    this.rememberAutoSync("background");
     await this.logger.info("Background sync started", {
       cooldownMs: BACKGROUND_SYNC_COOLDOWN_MS,
     });
-    await this.sync("background");
+    await this.logAutoSyncResult("Background", await this.sync("background"));
   }
 
   private foregroundSyncSkipReason(): string | null {
@@ -280,6 +285,9 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     }
     if (this.syncManager.isSyncing()) {
       return "sync-already-running";
+    }
+    if (this.wasRecentAutoSync("background")) {
+      return "recent-background-sync";
     }
     if (
       this.lastForegroundSyncAt !== null &&
@@ -316,5 +324,35 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
       return "cooldown";
     }
     return null;
+  }
+
+  private rememberAutoSync(trigger: "foreground" | "background"): void {
+    this.lastAutoSyncAt = Date.now();
+    this.lastAutoSyncTrigger = trigger;
+  }
+
+  private wasRecentAutoSync(trigger: "foreground" | "background"): boolean {
+    return (
+      this.lastAutoSyncTrigger === trigger &&
+      this.lastAutoSyncAt !== null &&
+      Date.now() - this.lastAutoSyncAt < AUTO_SYNC_COOLDOWN_MS
+    );
+  }
+
+  private async logAutoSyncResult(
+    label: "Foreground" | "Background",
+    result: SyncResult | void,
+  ): Promise<void> {
+    if (!result) {
+      await this.logger.info(`${label} sync finished`, { status: "skipped" });
+      return;
+    }
+    await this.logger.info(`${label} sync finished`, {
+      status: result.status,
+      trigger: result.trigger,
+      commitSha: result.commitSha ?? null,
+      recovered: result.recovered ?? false,
+      attempts: result.attempts ?? null,
+    });
   }
 }

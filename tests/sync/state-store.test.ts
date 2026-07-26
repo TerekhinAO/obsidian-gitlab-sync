@@ -28,6 +28,7 @@ describe("StateStore", () => {
     expect(data.settings.syncOnStartup).toBe(true);
     expect(data.settings.syncOnForeground).toBe(true);
     expect(data.settings.syncOnBackground).toBe(false);
+    expect(data.settings.loggingLevel).toBe("off");
     expect(data.state.initialized).toBe(false);
     expect(data.state.lastSyncedCommitSha).toBeNull();
     expect(data.state.trackedFiles).toEqual({});
@@ -43,6 +44,16 @@ describe("StateStore", () => {
     const data = await new StateStore(plugin).load();
 
     expect(data.settings.gitlabBaseUrl).toBe("https://gitlab.example.com");
+  });
+
+  it("migrates old enabled logging to debug level", async () => {
+    const { plugin } = fakePlugin({
+      settings: { loggingEnabled: true },
+    });
+
+    const data = await new StateStore(plugin).load();
+
+    expect(data.settings.loggingLevel).toBe("debug");
   });
 
   it("rejects non-HTTPS GitLab base URLs", async () => {

@@ -32,6 +32,9 @@ export class StateStore {
       ...DEFAULT_SETTINGS,
       ...(raw?.settings ?? {}),
     };
+    if (raw?.settings?.loggingLevel === undefined) {
+      settings.loggingLevel = raw?.settings?.loggingEnabled ? "debug" : "off";
+    }
     settings.gitlabBaseUrl = normalizeBaseUrl(settings.gitlabBaseUrl);
 
     return {

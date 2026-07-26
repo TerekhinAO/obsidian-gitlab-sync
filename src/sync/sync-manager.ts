@@ -114,7 +114,7 @@ export interface SyncManagerOptions {
   plugin?: Plugin;
   stateStore: Pick<StateStore, "load" | "save" | "update">;
   settings?: GitLabSyncSettings;
-  logger?: Pick<Logger, "info" | "warn" | "error">;
+  logger?: Pick<Logger, "debug" | "info" | "warn" | "error">;
   getToken?: (settings: GitLabSyncSettings) => Promise<string | null>;
   createGitLabClient?: (settings: GitLabSyncSettings, token: string) => GitLabClientLike;
   createRemoteDiffService?: (
@@ -576,7 +576,7 @@ export class SyncManager {
   private createClient(settings: GitLabSyncSettings, token: string): GitLabClientLike {
     return this.options.createGitLabClient?.(settings, token) ?? new GitLabClient(settings, token, {
       onRequest: async (diagnostic) => {
-        await this.options.logger?.info("GitLab request", diagnostic);
+        await this.options.logger?.debug("GitLab request", diagnostic);
       },
     });
   }

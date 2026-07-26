@@ -42,7 +42,7 @@ describe("GitLab settings persistence", () => {
           },
         },
       } as any,
-      true,
+      "debug",
     );
 
     await logger.info("request failed", {
@@ -55,5 +55,36 @@ describe("GitLab settings persistence", () => {
     expect(log).not.toContain("hidden");
     expect(log).toContain("[REDACTED]");
     expect(log).toContain("visible");
+  });
+
+  it("filters log entries by configured level", async () => {
+    let log = "";
+    const logger = new Logger(
+      {
+        configDir: ".obsidian",
+        adapter: {
+          exists: async () => true,
+          append: async (_path: string, value: string) => {
+            log += value;
+          },
+          read: async () => log,
+          write: async (_path: string, value: string) => {
+            log = value;
+          },
+        },
+      } as any,
+      "info",
+    );
+
+    await logger.debug("debug noise");
+    await logger.info("important info");
+    logger.setLevel("error");
+    await logger.info("hidden info");
+    await logger.error("important error");
+
+    expect(log).not.toContain("debug noise");
+    expect(log).toContain("important info");
+    expect(log).not.toContain("hidden info");
+    expect(log).toContain("important error");
   });
 });

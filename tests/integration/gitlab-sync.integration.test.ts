@@ -489,6 +489,7 @@ function gitlabSettings(server: GitLabTestServer): GitLabSyncSettings {
     syncOnForeground: true,
     syncOnBackground: false,
     showRibbonIcon: true,
+    loggingLevel: "off",
     loggingEnabled: false,
   };
 }
@@ -517,6 +518,7 @@ function clone<T>(value: T): T {
 }
 
 const silentLogger = {
+  debug: async () => undefined,
   info: async () => undefined,
   warn: async () => undefined,
   error: async () => undefined,

@@ -214,17 +214,22 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Enable logging")
-      .addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.loggingEnabled).onChange(async (value) => {
-          this.plugin.settings.loggingEnabled = value;
-          if (value) {
-            this.plugin.logger.enable();
-          } else {
-            this.plugin.logger.disable();
-          }
-          await this.plugin.saveSettings();
-        }),
+      .setName("Log level")
+      .setDesc("Use Debug only while diagnosing sync behavior")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("off", "Off")
+          .addOption("error", "Error")
+          .addOption("info", "Info")
+          .addOption("debug", "Debug")
+          .setValue(this.plugin.settings.loggingLevel)
+          .onChange(async (value) => {
+            this.plugin.settings.loggingLevel =
+              value === "error" || value === "info" || value === "debug" ? value : "off";
+            this.plugin.settings.loggingEnabled = this.plugin.settings.loggingLevel !== "off";
+            this.plugin.logger.setLevel(this.plugin.settings.loggingLevel);
+            await this.plugin.saveSettings();
+          }),
       );
 
     new Setting(containerEl)

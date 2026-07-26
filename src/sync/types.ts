@@ -1,4 +1,5 @@
 export type DirtyOperation = "upsert" | "delete";
+export type LogLevel = "off" | "error" | "info" | "debug";
 
 export interface DirtyEntry {
   path: string;
@@ -23,6 +24,7 @@ export interface GitLabSyncSettings {
   syncOnForeground: boolean;
   syncOnBackground: boolean;
   showRibbonIcon: boolean;
+  loggingLevel: LogLevel;
   loggingEnabled: boolean;
 }
 

@@ -31,6 +31,7 @@ const settings: GitLabSyncSettings = {
   syncOnForeground: true,
   syncOnBackground: false,
   showRibbonIcon: true,
+  loggingLevel: "off",
   loggingEnabled: false,
 };
 
