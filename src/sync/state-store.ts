@@ -5,6 +5,14 @@ import {
   type PluginData,
 } from "../settings/settings";
 
+function cloneDefaultState() {
+  return {
+    ...DEFAULT_STATE,
+    trackedFiles: {},
+    dirtyEntries: {},
+  };
+}
+
 function normalizeBaseUrl(url: string): string {
   const trimmed = url.trim().replace(/\/+$/, "");
   if (!trimmed.startsWith("https://")) {
@@ -29,8 +37,10 @@ export class StateStore {
     return {
       settings,
       state: {
-        ...DEFAULT_STATE,
+        ...cloneDefaultState(),
         ...(raw?.state ?? {}),
+        trackedFiles: { ...(raw?.state?.trackedFiles ?? {}) },
+        dirtyEntries: { ...(raw?.state?.dirtyEntries ?? {}) },
         schemaVersion: 1,
       },
     };
@@ -43,8 +53,10 @@ export class StateStore {
         gitlabBaseUrl: normalizeBaseUrl(data.settings.gitlabBaseUrl),
       },
       state: {
-        ...DEFAULT_STATE,
+        ...cloneDefaultState(),
         ...data.state,
+        trackedFiles: { ...data.state.trackedFiles },
+        dirtyEntries: { ...data.state.dirtyEntries },
         schemaVersion: 1,
       },
     };
