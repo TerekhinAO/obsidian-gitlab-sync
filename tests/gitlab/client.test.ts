@@ -1,0 +1,289 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { GitLabSyncSettings } from "../../src/sync/types";
+import {
+  GitLabAuthenticationError,
+  GitLabConflictError,
+  GitLabForbiddenError,
+  GitLabNotFoundError,
+  GitLabPayloadTooLargeError,
+  GitLabRateLimitError,
+} from "../../src/gitlab/errors";
+import { GitLabClient } from "../../src/gitlab/client";
+import {
+  arrayBufferFromText,
+  FakeRequestUrl,
+} from "../helpers/fake-request-url";
+
+const requestUrlMock = vi.hoisted(() => vi.fn());
+
+vi.mock("obsidian", () => ({
+  requestUrl: requestUrlMock,
+}));
+
+const settings: GitLabSyncSettings = {
+  gitlabBaseUrl: "https://gitlab.com",
+  projectPath: "developing1382536/obsidian-vault",
+  branch: "main",
+  tokenSecretName: "gitlab-gitless-sync-token",
+  authorName: "Mobile User",
+  authorEmail: "mobile@example.com",
+  syncOnStartup: true,
+  showRibbonIcon: true,
+  loggingEnabled: false,
+};
+
+describe("GitLabClient", () => {
+  let fake: FakeRequestUrl;
+
+  beforeEach(() => {
+    fake = new FakeRequestUrl();
+    requestUrlMock.mockReset();
+    requestUrlMock.mockImplementation(fake.requestUrl);
+  });
+
+  it("encodes project paths exactly and authenticates with PRIVATE-TOKEN", async () => {
+    fake.queue({
+      status: 200,
+      json: { name: "main", can_push: true, commit: { id: "abc", parent_ids: [] } },
+    });
+
+    await new GitLabClient(settings, "glpat-secret-value").validateAccess();
+
+    expect(fake.calls[0].url).toBe(
+      "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/branches/main",
+    );
+    expect(fake.calls[0].headers).toMatchObject({
+      "PRIVATE-TOKEN": "glpat-secret-value",
+    });
+    expect(fake.calls[0].url).not.toContain("glpat-secret-value");
+  });
+
+  it("follows repository tree pagination using X-Next-Page", async () => {
+    fake.queue({
+      status: 200,
+      headers: { "X-Next-Page": "2" },
+      json: [
+        { id: "blob-1", name: "a.md", type: "blob", path: "a.md", mode: "100644" },
+      ],
+    });
+    fake.queue({
+      status: 200,
+      headers: { "X-Next-Page": "" },
+      json: [
+        {
+          id: "blob-2",
+          name: "b.md",
+          type: "blob",
+          path: "folder/b.md",
+          mode: "100644",
+        },
+      ],
+    });
+
+    const tree = await new GitLabClient(settings, "token").getTree("feature/mobile");
+
+    expect(tree.map((item) => item.path)).toEqual(["a.md", "folder/b.md"]);
+    expect(fake.calls).toHaveLength(2);
+    expect(fake.calls[0].url).toBe(
+      "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/tree?ref=feature%2Fmobile&recursive=true&per_page=100&page=1",
+    );
+    expect(fake.calls[1].url).toBe(
+      "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/tree?ref=feature%2Fmobile&recursive=true&per_page=100&page=2",
+    );
+  });
+
+  it("returns typed branch, compare, raw file, blob, archive, and commit responses", async () => {
+    fake.queue({
+      status: 200,
+      json: {
+        name: "main",
+        can_push: true,
+        commit: { id: "head-sha", parent_ids: ["parent-sha"] },
+      },
+    });
+    fake.queue({
+      status: 200,
+      json: {
+        compare_timeout: true,
+        diffs: [
+          {
+            old_path: "old.md",
+            new_path: "new.md",
+            new_file: false,
+            renamed_file: true,
+            deleted_file: false,
+            collapsed: true,
+            too_large: true,
+          },
+        ],
+      },
+    });
+    fake.queue({ status: 200, arrayBuffer: arrayBufferFromText("hello") });
+    fake.queue({ status: 404, json: { message: "404 File Not Found" } });
+    fake.queue({ status: 200, arrayBuffer: arrayBufferFromText("blob") });
+    fake.queue({ status: 200, arrayBuffer: arrayBufferFromText("zip") });
+    fake.queue({
+      status: 201,
+      json: { id: "new-commit", parent_ids: ["head-sha"] },
+    });
+
+    const client = new GitLabClient(settings, "token");
+
+    await expect(client.getBranch()).resolves.toEqual({
+      name: "main",
+      can_push: true,
+      commit: { id: "head-sha", parent_ids: ["parent-sha"] },
+    });
+    await expect(client.compare("base", "head")).resolves.toMatchObject({
+      compare_timeout: true,
+      diffs: [{ renamed_file: true, collapsed: true, too_large: true }],
+    });
+    await expect(client.getRawFile("folder/note.md", "main")).resolves.toEqual(
+      arrayBufferFromText("hello"),
+    );
+    await expect(client.getRawFile("missing.md", "main")).resolves.toBeNull();
+    await expect(client.getRawBlob("blob-sha")).resolves.toEqual(
+      arrayBufferFromText("blob"),
+    );
+    await expect(client.downloadArchive("head")).resolves.toEqual(
+      arrayBufferFromText("zip"),
+    );
+    await expect(
+      client.createCommit({
+        message: "sync",
+        actions: [
+          {
+            action: "create",
+            file_path: "new.md",
+            content: "bmV3",
+            encoding: "base64",
+          },
+          {
+            action: "update",
+            file_path: "update.md",
+            content: "dXBkYXRl",
+            encoding: "base64",
+            last_commit_id: "old",
+          },
+          { action: "delete", file_path: "delete.md", last_commit_id: "old" },
+        ],
+      }),
+    ).resolves.toEqual({ id: "new-commit", parent_ids: ["head-sha"] });
+
+    expect(fake.calls[2].url).toBe(
+      "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/files/folder%2Fnote.md/raw?ref=main",
+    );
+    expect(JSON.parse(fake.calls[6].body as string)).toEqual({
+      branch: "main",
+      commit_message: "sync",
+      author_name: "Mobile User",
+      author_email: "mobile@example.com",
+      actions: [
+        {
+          action: "create",
+          file_path: "new.md",
+          content: "bmV3",
+          encoding: "base64",
+        },
+        {
+          action: "update",
+          file_path: "update.md",
+          content: "dXBkYXRl",
+          encoding: "base64",
+          last_commit_id: "old",
+        },
+        { action: "delete", file_path: "delete.md", last_commit_id: "old" },
+      ],
+    });
+  });
+
+  it.each([
+    [401, GitLabAuthenticationError],
+    [403, GitLabForbiddenError],
+    [404, GitLabNotFoundError],
+    [409, GitLabConflictError],
+    [429, GitLabRateLimitError],
+  ])("maps %s responses to typed errors", async (status, ErrorClass) => {
+    fake.queue({
+      status,
+      headers: { "Retry-After": "7" },
+      json: { message: "GitLab says no" },
+    });
+
+    const error = await new GitLabClient(settings, "token")
+      .getBranch()
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(ErrorClass);
+    expect(error.status).toBe(status);
+    if (status === 429) {
+      expect(error.retryAfterSeconds).toBe(7);
+    }
+  });
+
+  it("retries transient 5xx responses with bounded exponential backoff", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    fake.queue({ status: 502, json: { message: "bad gateway" } });
+    fake.queue({ status: 503, json: { message: "unavailable" } });
+    fake.queue({
+      status: 200,
+      json: { name: "main", can_push: true, commit: { id: "abc", parent_ids: [] } },
+    });
+
+    await expect(
+      new GitLabClient(settings, "token", { sleep }).getBranch(),
+    ).resolves.toMatchObject({ name: "main" });
+
+    expect(fake.calls).toHaveLength(3);
+    expect(sleep).toHaveBeenCalledWith(250);
+    expect(sleep).toHaveBeenCalledWith(500);
+  });
+
+  it("warns for large commit payloads without splitting the commit", async () => {
+    const onPayloadWarning = vi.fn();
+    fake.queue({ status: 201, json: { id: "sha", parent_ids: [] } });
+
+    await new GitLabClient(settings, "token", {
+      maxPayloadBytes: 1_000,
+      payloadWarningBytes: 4,
+      onPayloadWarning,
+    }).createCommit({
+      message: "sync",
+      actions: [
+        {
+          action: "create",
+          file_path: "big.md",
+          content: "MTIzNDU=",
+          encoding: "base64",
+        },
+      ],
+    });
+
+    expect(onPayloadWarning).toHaveBeenCalledWith(
+      expect.objectContaining({ decodedBytes: 5 }),
+    );
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  it("rejects decoded or JSON commit payloads over the safety limit", async () => {
+    const client = new GitLabClient(settings, "token", {
+      maxPayloadBytes: 4,
+      payloadWarningBytes: 2,
+    });
+
+    await expect(
+      client.createCommit({
+        message: "sync",
+        actions: [
+          {
+            action: "create",
+            file_path: "too-big.md",
+            content: "MTIzNDU=",
+            encoding: "base64",
+          },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(GitLabPayloadTooLargeError);
+    expect(fake.calls).toHaveLength(0);
+  });
+});
