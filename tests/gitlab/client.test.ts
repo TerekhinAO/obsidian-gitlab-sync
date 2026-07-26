@@ -33,6 +33,7 @@ const settings: GitLabSyncSettings = {
   showRibbonIcon: true,
   loggingLevel: "off",
   loggingEnabled: false,
+  conflictStrategy: "remote",
 };
 
 describe("GitLabClient", () => {

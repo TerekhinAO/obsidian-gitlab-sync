@@ -126,7 +126,7 @@ export interface SyncManagerOptions {
     client: GitLabClientLike,
     ignoreMatcher: IgnoreMatcherLike,
   ) => LocalSnapshotLike;
-  createPlanner?: (client: GitLabClientLike) => PlannerLike;
+  createPlanner?: (client: GitLabClientLike, settings: GitLabSyncSettings) => PlannerLike;
   journal?: JournalLike;
   materializer?: MaterializerLike;
   now?: () => number;
@@ -331,7 +331,7 @@ export class SyncManager {
       this.setProgress(input.progress, "Saving local changes…");
       const localSnapshots = await snapshotService.snapshot(dirtyEntries, trackedFiles);
       this.setProgress(input.progress, "Resolving conflicts…");
-      const planner = this.createPlanner(input.client);
+      const planner = this.createPlanner(input.client, input.settings);
       const plan = await planner.plan({
         baseSha,
         remoteSha,
@@ -364,6 +364,7 @@ export class SyncManager {
       });
       const finalizedPlan = await this.planForActualCreatedCommit(
         input.client,
+        input.settings,
         baseSha,
         createdCommit,
         plan,
@@ -390,6 +391,7 @@ export class SyncManager {
 
   private async planForActualCreatedCommit(
     client: GitLabClientLike,
+    settings: GitLabSyncSettings,
     baseSha: string,
     createdCommit: CreatedGitLabCommit,
     plan: SyncPlan,
@@ -413,7 +415,7 @@ export class SyncManager {
       return plan;
     }
 
-    const planner = this.createPlanner(client);
+    const planner = this.createPlanner(client, settings);
     return await planner.plan({
       baseSha,
       remoteSha: createdCommit.id,
@@ -539,6 +541,7 @@ export class SyncManager {
       projectPath: settings.projectPath.trim(),
       branch: settings.branch.trim(),
       tokenSecretName: settings.tokenSecretName.trim(),
+      conflictStrategy: settings.conflictStrategy === "local" ? "local" : "remote",
     };
   }
 
@@ -613,11 +616,12 @@ export class SyncManager {
     );
   }
 
-  private createPlanner(client: GitLabClientLike): PlannerLike {
-    return this.options.createPlanner?.(client) ?? new SyncPlanner({
+  private createPlanner(client: GitLabClientLike, settings: GitLabSyncSettings): PlannerLike {
+    return this.options.createPlanner?.(client, settings) ?? new SyncPlanner({
       getRemoteVersion: async (path, remoteSha) =>
         versionFromArrayBuffer(await client.getRawFile(path, remoteSha)),
       deviceName: "iPhone",
+      conflictStrategy: settings.conflictStrategy,
     });
   }
 

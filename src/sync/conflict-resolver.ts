@@ -1,6 +1,6 @@
 import type { GitLabCommitAction } from "../gitlab/types";
 import type { LocalSnapshotEntry, VersionState } from "./local-snapshot";
-import type { MaterializeOperation, TrackedFile } from "./types";
+import type { ConflictStrategy, MaterializeOperation, TrackedFile } from "./types";
 
 export type { LocalSnapshotEntry, VersionState } from "./local-snapshot";
 
@@ -14,7 +14,17 @@ export interface ConflictResolutionPlan {
   >;
 }
 
+interface ConflictResolverOptions {
+  strategy?: ConflictStrategy;
+}
+
 export class ConflictResolver {
+  private readonly strategy: ConflictStrategy;
+
+  constructor(options: ConflictResolverOptions = {}) {
+    this.strategy = options.strategy ?? "remote";
+  }
+
   async resolve(input: {
     snapshots: LocalSnapshotEntry[];
     remote: Record<string, VersionState>;
@@ -76,7 +86,16 @@ export class ConflictResolver {
       return;
     }
 
-    await preserveBoth(snapshot.path, snapshot.local, remote, now, deviceName, occupied, plan);
+    await preserveBoth(
+      snapshot.path,
+      snapshot.local,
+      remote,
+      now,
+      deviceName,
+      occupied,
+      plan,
+      this.strategy,
+    );
   }
 
   private async resolveUnknownBase(
@@ -91,7 +110,16 @@ export class ConflictResolver {
       return;
     }
 
-    await preserveBoth(snapshot.path, snapshot.local, remote, now, deviceName, occupied, plan);
+    await preserveBoth(
+      snapshot.path,
+      snapshot.local,
+      remote,
+      now,
+      deviceName,
+      occupied,
+      plan,
+      this.strategy,
+    );
   }
 }
 
@@ -124,10 +152,15 @@ async function preserveBoth(
   deviceName: string,
   occupied: Set<string>,
   plan: ConflictResolutionPlan,
+  strategy: ConflictStrategy,
 ): Promise<void> {
-  materialize(path, remote, plan);
+  if (strategy === "local") {
+    await preserveBothLocalFirst(path, local, remote, now, occupied, plan);
+    return;
+  }
 
   if (!local.exists || local.bytes === null) {
+    materialize(path, remote, plan);
     const markerBytes = new TextEncoder().encode(deletionMarker(path));
     const markerPath = nextAvailablePath(
       conflictPath(path, "deletion conflict", deviceName, now, ".md"),
@@ -137,11 +170,35 @@ async function preserveBoth(
     return;
   }
 
+  materialize(path, remote, plan);
   const copyPath = nextAvailablePath(
     conflictPath(path, "conflict", deviceName, now),
     occupied,
   );
-  await addCreatedConflict(copyPath, local.bytes, occupied, plan);
+  await addCreatedConflict(
+    copyPath,
+    conflictCopyBytes(path, local, remote, "remote"),
+    occupied,
+    plan,
+  );
+}
+
+async function preserveBothLocalFirst(
+  path: string,
+  local: VersionState,
+  remote: VersionState,
+  now: Date,
+  occupied: Set<string>,
+  plan: ConflictResolutionPlan,
+): Promise<void> {
+  await commitOriginal(path, local, remote.exists, plan);
+
+  const copyBytes = conflictCopyBytes(path, remote, local, "local");
+  const copyPath = nextAvailablePath(
+    conflictPath(path, "conflict", "GitLab", now, copyBytes === remote.bytes ? undefined : ".md"),
+    occupied,
+  );
+  await addCreatedConflict(copyPath, copyBytes, occupied, plan);
 }
 
 function materialize(
@@ -279,6 +336,138 @@ function deletionMarker(path: string): string {
     "The GitLab version was kept at the original path. Review it and delete it manually if deletion is still intended.",
     "",
   ].join("\n");
+}
+
+function conflictCopyBytes(
+  path: string,
+  copy: VersionState,
+  original: VersionState,
+  keptSide: ConflictStrategy,
+): Uint8Array {
+  if (!copy.exists || copy.bytes === null) {
+    return new TextEncoder().encode(deletedSideMarker(path, keptSide));
+  }
+
+  if (!isProbablyText(path, copy.bytes) || (original.exists && original.bytes !== null && !isProbablyText(path, original.bytes))) {
+    return copy.bytes;
+  }
+
+  return new TextEncoder().encode(conflictReport(path, copy, original, keptSide));
+}
+
+function conflictReport(
+  path: string,
+  copy: VersionState,
+  original: VersionState,
+  keptSide: ConflictStrategy,
+): string {
+  const copySide = keptSide === "remote" ? "iPhone" : "GitLab";
+  const keptLabel = keptSide === "remote" ? "GitLab" : "iPhone";
+  const localText = keptSide === "remote"
+    ? versionText(copy)
+    : versionText(original);
+  const remoteText = keptSide === "remote"
+    ? versionText(original)
+    : versionText(copy);
+
+  return [
+    "# Sync conflict",
+    "",
+    `Original path: \`${path}\``,
+    `Kept at original path: ${keptLabel}`,
+    `Conflict copy contains: ${copySide}`,
+    "",
+    "## Diff",
+    "",
+    "```diff",
+    ...diffLines(remoteText, localText),
+    "```",
+    "",
+    "## iPhone version",
+    "",
+    "```markdown",
+    localText,
+    "```",
+    "",
+    "## GitLab version",
+    "",
+    "```markdown",
+    remoteText,
+    "```",
+    "",
+  ].join("\n");
+}
+
+function deletedSideMarker(path: string, keptSide: ConflictStrategy): string {
+  const keptLabel = keptSide === "remote" ? "GitLab" : "iPhone";
+  const deletedLabel = keptSide === "remote" ? "iPhone" : "GitLab";
+  return [
+    "# Sync conflict: deletion",
+    "",
+    `Original path: \`${path}\``,
+    `Kept at original path: ${keptLabel}`,
+    `Conflict copy contains: ${deletedLabel} deletion marker`,
+    "",
+    `${deletedLabel} deleted this file while ${keptLabel} changed it.`,
+    "",
+  ].join("\n");
+}
+
+function diffLines(remoteText: string, localText: string): string[] {
+  const remoteLines = remoteText.split("\n");
+  const localLines = localText.split("\n");
+  const max = Math.max(remoteLines.length, localLines.length);
+  const lines: string[] = [];
+
+  for (let index = 0; index < max; index += 1) {
+    const remoteLine = remoteLines[index];
+    const localLine = localLines[index];
+    if (remoteLine === localLine) {
+      if (remoteLine !== undefined) {
+        lines.push(`  ${remoteLine}`);
+      }
+      continue;
+    }
+    if (remoteLine !== undefined) {
+      lines.push(`- GitLab: ${remoteLine}`);
+    }
+    if (localLine !== undefined) {
+      lines.push(`+ iPhone: ${localLine}`);
+    }
+  }
+
+  return lines.length === 0 ? ["  No textual line differences found."] : lines;
+}
+
+function versionText(version: VersionState): string {
+  if (!version.exists || version.bytes === null) {
+    return "[deleted]";
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(version.bytes);
+}
+
+function isProbablyText(path: string, bytes: Uint8Array): boolean {
+  const lowerPath = path.toLowerCase();
+  const textExtension = [
+    ".md",
+    ".txt",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".csv",
+    ".html",
+    ".css",
+    ".js",
+    ".ts",
+    ".xml",
+  ].some((extension) => lowerPath.endsWith(extension));
+
+  if (!textExtension) {
+    return false;
+  }
+
+  const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  return !decoded.includes("\uFFFD");
 }
 
 function toBase64(bytes: Uint8Array): string {

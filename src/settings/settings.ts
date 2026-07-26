@@ -15,6 +15,7 @@ export const DEFAULT_SETTINGS: GitLabSyncSettings = {
   showRibbonIcon: true,
   loggingLevel: "off",
   loggingEnabled: false,
+  conflictStrategy: "remote",
 };
 
 export const DEFAULT_STATE: LocalSyncState = {

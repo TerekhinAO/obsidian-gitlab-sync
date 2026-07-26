@@ -152,17 +152,26 @@ describe("SyncPlanner", () => {
       now,
     });
 
+    const noteReport = report("note.md", "GitLab", "iPhone", "local", "remote");
+    const deletedRemoteReport = report(
+      "deleted-remotely.md",
+      "GitLab",
+      "iPhone",
+      "local delete conflict",
+      "[deleted]",
+    );
+
     expect(plan.actions).toEqual([
       {
         action: "create",
         file_path: "note — conflict iPhone 2026-07-26 20-15.md",
-        content: base64("local"),
+        content: base64(noteReport),
         encoding: "base64",
       },
       {
         action: "create",
         file_path: "deleted-remotely — conflict iPhone 2026-07-26 20-15.md",
-        content: base64("local delete conflict"),
+        content: base64(deletedRemoteReport),
         encoding: "base64",
       },
       {
@@ -185,13 +194,13 @@ describe("SyncPlanner", () => {
       {
         type: "write",
         path: "note — conflict iPhone 2026-07-26 20-15.md",
-        contentBase64: base64("local"),
+        contentBase64: base64(noteReport),
       },
       { type: "delete", path: "deleted-remotely.md" },
       {
         type: "write",
         path: "deleted-remotely — conflict iPhone 2026-07-26 20-15.md",
-        contentBase64: base64("local delete conflict"),
+        contentBase64: base64(deletedRemoteReport),
       },
       { type: "write", path: "remote-edited.md", contentBase64: base64("remote edit") },
       {
@@ -215,8 +224,8 @@ describe("SyncPlanner", () => {
     expect(plan.nextTrackedFiles).toEqual({
       "note.md": tracked("remote"),
       "remote-edited.md": tracked("remote edit"),
-      "note — conflict iPhone 2026-07-26 20-15.md": tracked("local"),
-      "deleted-remotely — conflict iPhone 2026-07-26 20-15.md": tracked("local delete conflict"),
+      "note — conflict iPhone 2026-07-26 20-15.md": tracked(noteReport),
+      "deleted-remotely — conflict iPhone 2026-07-26 20-15.md": tracked(deletedRemoteReport),
       "remote-edited — deletion conflict iPhone 2026-07-26 20-15.md": tracked([
         "# Sync conflict: deletion on iPhone",
         "",
@@ -275,6 +284,42 @@ function bytes(text: string): Uint8Array {
 
 function base64(text: string): string {
   return Buffer.from(text).toString("base64");
+}
+
+function report(
+  path: string,
+  keptAtOriginalPath: string,
+  conflictCopyContains: string,
+  localText: string,
+  remoteText: string,
+): string {
+  return [
+    "# Sync conflict",
+    "",
+    `Original path: \`${path}\``,
+    `Kept at original path: ${keptAtOriginalPath}`,
+    `Conflict copy contains: ${conflictCopyContains}`,
+    "",
+    "## Diff",
+    "",
+    "```diff",
+    `- GitLab: ${remoteText}`,
+    `+ iPhone: ${localText}`,
+    "```",
+    "",
+    "## iPhone version",
+    "",
+    "```markdown",
+    localText,
+    "```",
+    "",
+    "## GitLab version",
+    "",
+    "```markdown",
+    remoteText,
+    "```",
+    "",
+  ].join("\n");
 }
 
 function blobId(value: Uint8Array): string {

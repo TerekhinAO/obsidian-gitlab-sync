@@ -12,6 +12,17 @@ function base64(text: string): string {
   return Buffer.from(text).toString("base64");
 }
 
+function decodeBase64(text: string): string {
+  return Buffer.from(text, "base64").toString("utf8");
+}
+
+function actionContent(action: { action: string; content?: string }): string {
+  if (!action.content) {
+    throw new Error(`Expected ${action.action} action to carry content`);
+  }
+  return action.content;
+}
+
 function blobId(text: string): string {
   return blobIdBytes(bytes(text));
 }
@@ -58,18 +69,22 @@ describe("ConflictResolver", () => {
       wantActions: [{
         action: "create",
         file_path: "note — conflict iPhone 2026-07-26 20-15.md",
-        content: base64("A"),
+        content: base64(report("note.md", "GitLab", "iPhone", "A", "B")),
         encoding: "base64",
       }],
       wantMaterialize: [
         { type: "write", path: "note.md", contentBase64: base64("B") },
-        { type: "write", path: "note — conflict iPhone 2026-07-26 20-15.md", contentBase64: base64("A") },
+        {
+          type: "write",
+          path: "note — conflict iPhone 2026-07-26 20-15.md",
+          contentBase64: base64(report("note.md", "GitLab", "iPhone", "A", "B")),
+        },
       ],
       wantConflicts: ["note — conflict iPhone 2026-07-26 20-15.md"],
       wantMutations: [{
         type: "set",
         path: "note — conflict iPhone 2026-07-26 20-15.md",
-        file: tracked("A"),
+        file: tracked(report("note.md", "GitLab", "iPhone", "A", "B")),
       }],
     },
     {
@@ -114,18 +129,22 @@ describe("ConflictResolver", () => {
       wantActions: [{
         action: "create",
         file_path: "note — conflict iPhone 2026-07-26 20-15.md",
-        content: base64("B"),
+        content: base64(report("note.md", "GitLab", "iPhone", "B", "C")),
         encoding: "base64",
       }],
       wantMaterialize: [
         { type: "write", path: "note.md", contentBase64: base64("C") },
-        { type: "write", path: "note — conflict iPhone 2026-07-26 20-15.md", contentBase64: base64("B") },
+        {
+          type: "write",
+          path: "note — conflict iPhone 2026-07-26 20-15.md",
+          contentBase64: base64(report("note.md", "GitLab", "iPhone", "B", "C")),
+        },
       ],
       wantConflicts: ["note — conflict iPhone 2026-07-26 20-15.md"],
       wantMutations: [{
         type: "set",
         path: "note — conflict iPhone 2026-07-26 20-15.md",
-        file: tracked("B"),
+        file: tracked(report("note.md", "GitLab", "iPhone", "B", "C")),
       }],
     },
     {
@@ -196,18 +215,22 @@ describe("ConflictResolver", () => {
       wantActions: [{
         action: "create",
         file_path: "note — conflict iPhone 2026-07-26 20-15.md",
-        content: base64("B"),
+        content: base64(report("note.md", "GitLab", "iPhone", "B", "[deleted]")),
         encoding: "base64",
       }],
       wantMaterialize: [
         { type: "delete", path: "note.md" },
-        { type: "write", path: "note — conflict iPhone 2026-07-26 20-15.md", contentBase64: base64("B") },
+        {
+          type: "write",
+          path: "note — conflict iPhone 2026-07-26 20-15.md",
+          contentBase64: base64(report("note.md", "GitLab", "iPhone", "B", "[deleted]")),
+        },
       ],
       wantConflicts: ["note — conflict iPhone 2026-07-26 20-15.md"],
       wantMutations: [{
         type: "set",
         path: "note — conflict iPhone 2026-07-26 20-15.md",
-        file: tracked("B"),
+        file: tracked(report("note.md", "GitLab", "iPhone", "B", "[deleted]")),
       }],
     },
     {
@@ -230,18 +253,22 @@ describe("ConflictResolver", () => {
       wantActions: [{
         action: "create",
         file_path: "note — conflict iPhone 2026-07-26 20-15.md",
-        content: base64("B"),
+        content: base64(report("note.md", "GitLab", "iPhone", "B", "C")),
         encoding: "base64",
       }],
       wantMaterialize: [
         { type: "write", path: "note.md", contentBase64: base64("C") },
-        { type: "write", path: "note — conflict iPhone 2026-07-26 20-15.md", contentBase64: base64("B") },
+        {
+          type: "write",
+          path: "note — conflict iPhone 2026-07-26 20-15.md",
+          contentBase64: base64(report("note.md", "GitLab", "iPhone", "B", "C")),
+        },
       ],
       wantConflicts: ["note — conflict iPhone 2026-07-26 20-15.md"],
       wantMutations: [{
         type: "set",
         path: "note — conflict iPhone 2026-07-26 20-15.md",
-        file: tracked("B"),
+        file: tracked(report("note.md", "GitLab", "iPhone", "B", "C")),
       }],
     },
   ])("$name", async (testCase) => {
@@ -282,6 +309,60 @@ describe("ConflictResolver", () => {
       path: "asset.bin",
       contentBase64: Buffer.from(invalidUtf8B).toString("base64"),
     });
+  });
+
+  it("keeps the remote version at the original path by default and writes a readable text conflict report", async () => {
+    const plan = await new ConflictResolver().resolve({
+      snapshots: [snapshot("note.md", present("local line"), present("base line"))],
+      remote: { "note.md": present("remote line") },
+      trackedFiles: {},
+      now,
+    });
+
+    const conflictBase64 = actionContent(plan.commitActions[0]);
+    const conflictContent = decodeBase64(conflictBase64);
+
+    expect(plan.materializeOperations).toEqual([
+      { type: "write", path: "note.md", contentBase64: base64("remote line") },
+      {
+        type: "write",
+        path: "note — conflict iPhone 2026-07-26 20-15.md",
+        contentBase64: conflictBase64,
+      },
+    ]);
+    expect(conflictContent).toContain("Kept at original path: GitLab");
+    expect(conflictContent).toContain("Conflict copy contains: iPhone");
+    expect(conflictContent).toContain("```diff");
+    expect(conflictContent).toContain("- GitLab: remote line");
+    expect(conflictContent).toContain("+ iPhone: local line");
+  });
+
+  it("can keep the local version at the original path and write the remote version to the conflict report", async () => {
+    const plan = await new ConflictResolver({ strategy: "local" }).resolve({
+      snapshots: [snapshot("note.md", present("local line"), present("base line"))],
+      remote: { "note.md": present("remote line") },
+      trackedFiles: {},
+      now,
+    });
+
+    const conflictBase64 = actionContent(plan.commitActions[1]);
+    const conflictContent = decodeBase64(conflictBase64);
+
+    expect(plan.commitActions[0]).toEqual({
+      action: "update",
+      file_path: "note.md",
+      content: base64("local line"),
+      encoding: "base64",
+    });
+    expect(plan.materializeOperations).toEqual([{
+      type: "write",
+      path: "note — conflict GitLab 2026-07-26 20-15.md",
+      contentBase64: conflictBase64,
+    }]);
+    expect(conflictContent).toContain("Kept at original path: iPhone");
+    expect(conflictContent).toContain("Conflict copy contains: GitLab");
+    expect(conflictContent).toContain("- GitLab: remote line");
+    expect(conflictContent).toContain("+ iPhone: local line");
   });
 
   it("keeps binary content base64 encoded in actions and materialization", async () => {
@@ -336,6 +417,42 @@ function missing(): VersionState {
 function tracked(text: string): TrackedFile {
   const value = bytes(text);
   return { blobId: blobId(text), mode: "100644", size: value.byteLength };
+}
+
+function report(
+  path: string,
+  keptAtOriginalPath: string,
+  conflictCopyContains: string,
+  localText: string,
+  remoteText: string,
+): string {
+  return [
+    "# Sync conflict",
+    "",
+    `Original path: \`${path}\``,
+    `Kept at original path: ${keptAtOriginalPath}`,
+    `Conflict copy contains: ${conflictCopyContains}`,
+    "",
+    "## Diff",
+    "",
+    "```diff",
+    `- GitLab: ${remoteText}`,
+    `+ iPhone: ${localText}`,
+    "```",
+    "",
+    "## iPhone version",
+    "",
+    "```markdown",
+    localText,
+    "```",
+    "",
+    "## GitLab version",
+    "",
+    "```markdown",
+    remoteText,
+    "```",
+    "",
+  ].join("\n");
 }
 
 function snapshot(

@@ -491,6 +491,7 @@ function gitlabSettings(server: GitLabTestServer): GitLabSyncSettings {
     showRibbonIcon: true,
     loggingLevel: "off",
     loggingEnabled: false,
+    conflictStrategy: "remote",
   };
 }
 

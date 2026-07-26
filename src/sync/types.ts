@@ -1,5 +1,6 @@
 export type DirtyOperation = "upsert" | "delete";
 export type LogLevel = "off" | "error" | "info" | "debug";
+export type ConflictStrategy = "remote" | "local";
 
 export interface DirtyEntry {
   path: string;
@@ -26,6 +27,7 @@ export interface GitLabSyncSettings {
   showRibbonIcon: boolean;
   loggingLevel: LogLevel;
   loggingEnabled: boolean;
+  conflictStrategy: ConflictStrategy;
 }
 
 export interface MaterializeOperation {

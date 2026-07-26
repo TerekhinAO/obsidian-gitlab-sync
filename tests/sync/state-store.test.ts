@@ -29,6 +29,7 @@ describe("StateStore", () => {
     expect(data.settings.syncOnForeground).toBe(true);
     expect(data.settings.syncOnBackground).toBe(false);
     expect(data.settings.loggingLevel).toBe("off");
+    expect(data.settings.conflictStrategy).toBe("remote");
     expect(data.state.initialized).toBe(false);
     expect(data.state.lastSyncedCommitSha).toBeNull();
     expect(data.state.trackedFiles).toEqual({});

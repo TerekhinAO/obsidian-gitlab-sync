@@ -238,6 +238,20 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
         }),
       );
 
+    new Setting(containerEl)
+      .setName("Conflict strategy")
+      .setDesc("Choose which side stays at the original path when both sides changed the same file")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("remote", "Remote")
+          .addOption("local", "Local")
+          .setValue(this.plugin.settings.conflictStrategy)
+          .onChange(async (value) => {
+            this.plugin.settings.conflictStrategy = value === "local" ? "local" : "remote";
+            await this.plugin.saveSettings();
+          }),
+      );
+
     new Setting(containerEl).setName("Interface").setHeading();
 
     new Setting(containerEl)

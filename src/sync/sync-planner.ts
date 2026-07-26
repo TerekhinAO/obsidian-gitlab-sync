@@ -6,7 +6,7 @@ import {
 } from "./conflict-resolver";
 import type { LocalSnapshotEntry } from "./local-snapshot";
 import type { RemoteChange } from "./remote-diff";
-import type { DirtyEntry, MaterializeOperation, TrackedFile } from "./types";
+import type { ConflictStrategy, DirtyEntry, MaterializeOperation, TrackedFile } from "./types";
 
 export interface SyncPlan {
   basedOnRemoteSha: string;
@@ -23,6 +23,7 @@ interface SyncPlannerOptions {
   getRemoteVersion?: (path: string, remoteSha: string) => Promise<VersionState>;
   getLastCommitId?: (path: string, remoteSha: string) => Promise<string | null>;
   deviceName?: string;
+  conflictStrategy?: ConflictStrategy;
 }
 
 export class SyncPlanner {
@@ -32,7 +33,8 @@ export class SyncPlanner {
   private readonly deviceName?: string;
 
   constructor(options: SyncPlannerOptions = {}) {
-    this.conflictResolver = options.conflictResolver ?? new ConflictResolver();
+    this.conflictResolver = options.conflictResolver ??
+      new ConflictResolver({ strategy: options.conflictStrategy });
     this.getRemoteVersion = options.getRemoteVersion ?? (async () => missing());
     this.getLastCommitId = options.getLastCommitId ?? (async () => null);
     this.deviceName = options.deviceName;
