@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ConflictFile, ConflictResolution } from "src/sync-manager";
+import { ConflictFile, ConflictResolution } from "src/sync/sync-manager";
 import DiffView from "./diff-view";
 
 const UnifiedView = ({

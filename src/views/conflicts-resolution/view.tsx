@@ -1,7 +1,7 @@
 import { IconName, ItemView, Menu, Platform, WorkspaceLeaf } from "obsidian";
 import { Root, createRoot } from "react-dom/client";
-import GitHubSyncPlugin from "src/main";
-import { ConflictFile, ConflictResolution } from "src/sync-manager";
+import GitLabGitlessSyncPlugin from "src/main";
+import { ConflictFile, ConflictResolution } from "src/sync/sync-manager";
 import SplitView from "./split-view/split-view";
 import UnifiedView from "./unified-view/unified-view";
 
@@ -13,7 +13,7 @@ export class ConflictsResolutionView extends ItemView {
 
   constructor(
     leaf: WorkspaceLeaf,
-    private plugin: GitHubSyncPlugin,
+    private plugin: GitLabGitlessSyncPlugin,
     private conflicts: ConflictFile[],
   ) {
     super(leaf);
@@ -55,16 +55,17 @@ export class ConflictsResolutionView extends ItemView {
       this.root = createRoot(container);
     }
 
+    const configuredMode = (this.plugin.settings as any).conflictViewMode ?? "default";
     let diffMode = "default";
-    if (this.plugin.settings.conflictViewMode === "default") {
+    if (configuredMode === "default") {
       if (Platform.isMobile) {
         diffMode = "unified";
       } else {
         diffMode = "split";
       }
-    } else if (this.plugin.settings.conflictViewMode === "split") {
+    } else if (configuredMode === "split") {
       diffMode = "split";
-    } else if (this.plugin.settings.conflictViewMode === "unified") {
+    } else if (configuredMode === "unified") {
       diffMode = "unified";
     }
 
