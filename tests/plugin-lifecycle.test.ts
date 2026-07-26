@@ -39,6 +39,7 @@ class TestPlugin extends GitLabGitlessSyncPlugin {
   public ribbonCalls: string[] = [];
   public settingTabs: any[] = [];
   public intervals: unknown[] = [];
+  public domEvents: { target: EventTarget; type: string; callback: EventListenerOrEventListenerObject }[] = [];
 
   constructor(data: any, app: any) {
     super(app, {} as any);
@@ -71,6 +72,14 @@ class TestPlugin extends GitLabGitlessSyncPlugin {
   registerInterval(interval: number) {
     this.intervals.push(interval);
     return interval;
+  }
+
+  registerDomEvent(
+    target: EventTarget,
+    type: string,
+    callback: EventListenerOrEventListenerObject,
+  ) {
+    this.domEvents.push({ target, type, callback });
   }
 }
 
@@ -141,6 +150,63 @@ describe("plugin lifecycle", () => {
       "Show GitLab sync status",
     ]);
     expect(plugin.intervals).toEqual([]);
+  });
+
+  it("logs app lifecycle events for mobile foreground diagnostics", async () => {
+    let log = "";
+    const documentTarget = new EventTarget() as Document;
+    Object.assign(documentTarget, {
+      visibilityState: "visible",
+      hidden: false,
+      hasFocus: () => true,
+    });
+    const windowTarget = new EventTarget() as Window;
+    vi.stubGlobal("document", documentTarget);
+    vi.stubGlobal("window", windowTarget);
+    const plugin = new TestPlugin(
+      fakePluginData({ settings: { loggingEnabled: true } }),
+      fakeApp((callback) => {
+        void callback();
+      }),
+    );
+    vi.spyOn(SyncManager.prototype, "startEventsListener").mockImplementation(() => undefined);
+    vi.spyOn(SyncManager.prototype, "recoverIfNeeded").mockResolvedValue(false);
+    vi.spyOn(SyncManager.prototype, "sync").mockResolvedValue({
+      status: "success",
+      trigger: "startup",
+      message: "ok",
+    });
+    plugin.app.vault.adapter.append = async (_path: string, value: string) => {
+      log += value;
+    };
+
+    await plugin.onload();
+
+    expect(plugin.domEvents.map((event) => event.type)).toEqual([
+      "visibilitychange",
+      "focus",
+      "blur",
+      "pageshow",
+      "pagehide",
+    ]);
+
+    const focusEvent = plugin.domEvents.find((event) => event.type === "focus");
+    expect(focusEvent).toBeDefined();
+    const callback = focusEvent!.callback;
+    if (typeof callback === "function") {
+      callback(new Event("focus"));
+    } else {
+      callback.handleEvent(new Event("focus"));
+    }
+
+    await vi.waitFor(() => {
+      expect(log).toContain('"message":"App lifecycle event"');
+      expect(log).toContain('"event":"focus"');
+      expect(log).toContain('"visibilityState"');
+      expect(log).toContain('"hasFocus"');
+    });
+
+    vi.unstubAllGlobals();
   });
 
   it("status modal never displays the token secret value", () => {

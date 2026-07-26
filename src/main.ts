@@ -28,6 +28,7 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
 
     this.logger = new Logger(this.app.vault, this.settings.loggingEnabled);
     await this.logger.init();
+    this.registerAppLifecycleDiagnostics();
 
     this.syncManager = new SyncManager({
       app: this.app,
@@ -183,5 +184,31 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     }
     const token = await storage.getSecret(this.settings.tokenSecretName);
     return token?.trim() || null;
+  }
+
+  private registerAppLifecycleDiagnostics(): void {
+    if (typeof document !== "undefined") {
+      this.registerDomEvent(document, "visibilitychange", (event) => {
+        void this.logAppLifecycleEvent(event);
+      });
+    }
+
+    if (typeof window !== "undefined") {
+      for (const eventName of ["focus", "blur", "pageshow", "pagehide"] as const) {
+        this.registerDomEvent(window, eventName, (event) => {
+          void this.logAppLifecycleEvent(event);
+        });
+      }
+    }
+  }
+
+  private async logAppLifecycleEvent(event: Event): Promise<void> {
+    await this.logger.info("App lifecycle event", {
+      event: event.type,
+      visibilityState: typeof document === "undefined" ? null : document.visibilityState,
+      documentHidden: typeof document === "undefined" ? null : document.hidden,
+      hasFocus: typeof document === "undefined" ? null : document.hasFocus(),
+      persisted: "persisted" in event ? Boolean((event as PageTransitionEvent).persisted) : null,
+    });
   }
 }
