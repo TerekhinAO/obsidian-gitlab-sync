@@ -660,7 +660,7 @@ export class SyncManager {
     const runtimeDir = `${configDir}/plugins/gitlab-gitless-sync/`;
     return (
       normalized === `${configDir}/gitlab-gitless-sync.log` ||
-      normalized === `${configDir}/github-sync-metadata.json` ||
+      isMetadataPath(normalized) ||
       normalized === `${configDir}/plugins/gitlab-gitless-sync` ||
       normalized.startsWith(runtimeDir)
     );
@@ -692,4 +692,9 @@ class BranchRaceError extends Error {
   constructor(readonly attempts: number) {
     super("GitLab branch changed during sync; retry later");
   }
+}
+
+function isMetadataPath(path: string): boolean {
+  return path.endsWith("github-sync-metadata.json") ||
+    path.endsWith("gitlab-sync-metadata.json");
 }

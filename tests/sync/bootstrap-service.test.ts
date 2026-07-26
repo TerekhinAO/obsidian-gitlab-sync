@@ -258,11 +258,6 @@ describe("BootstrapService", () => {
     expect(setup.read("generated-root/folder/note.md")).toBeUndefined();
     expect(result.trackedFiles).toEqual({
       "folder/note.md": { blobId: "blob-note", mode: "100644", size: 0 },
-      ".obsidian/plugins/gitlab-gitless-sync/main.js": {
-        blobId: "blob-plugin",
-        mode: "100644",
-        size: 0,
-      },
     });
   });
 

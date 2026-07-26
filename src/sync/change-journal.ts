@@ -138,11 +138,16 @@ export class ChangeJournal {
     const runtimeDir = `${configDir}/plugins/${this.pluginId}/`;
     return (
       path === `${configDir}/gitlab-gitless-sync.log` ||
-      path === `${configDir}/github-sync-metadata.json` ||
+      isMetadataPath(path) ||
       path === `${configDir}/plugins/${this.pluginId}` ||
       path.startsWith(runtimeDir)
     );
   }
+}
+
+function isMetadataPath(path: string): boolean {
+  return path.endsWith("github-sync-metadata.json") ||
+    path.endsWith("gitlab-sync-metadata.json");
 }
 
 function applyDirtyEntry(

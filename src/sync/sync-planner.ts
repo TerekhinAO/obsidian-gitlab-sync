@@ -94,9 +94,11 @@ export class SyncPlanner {
     return {
       basedOnRemoteSha: input.remoteSha,
       actions,
-      materializeAfterCommit: actions.length > 0 ? conflictPlan.materializeOperations : [],
+      materializeAfterCommit: actions.length > 0
+        ? [...materializeWithoutCommit, ...conflictPlan.materializeOperations]
+        : [],
       materializeWithoutCommit: actions.length > 0
-        ? materializeWithoutCommit
+        ? []
         : [...materializeWithoutCommit, ...conflictPlan.materializeOperations],
       nextTrackedFiles,
       acknowledgedDirtyPaths: input.localSnapshots

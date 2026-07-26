@@ -48,7 +48,10 @@ export class BootstrapService {
 
     const branch = await this.options.client.getBranch();
     const commitSha = this.commitSha(branch);
-    const trackedFiles = treeToTrackedFiles(await this.options.client.getTree(commitSha));
+    const trackedFiles = treeToTrackedFiles(
+      await this.options.client.getTree(commitSha),
+      (path) => this.isHardExcluded(path),
+    );
     const archive = await this.options.client.downloadArchive(commitSha);
     const operations = await this.readArchive(archive);
 
@@ -161,7 +164,7 @@ export class BootstrapService {
       throw new Error(`Unsafe GitLab archive entry: ${rawPath}`);
     }
 
-    if (this.isActivePluginPath(targetPath)) {
+    if (this.isHardExcluded(targetPath)) {
       return null;
     }
 
@@ -251,6 +254,10 @@ export class BootstrapService {
     const pluginDir = `${configDir}/plugins/${this.pluginId}`;
     return path === pluginDir || path.startsWith(`${pluginDir}/`);
   }
+
+  private isHardExcluded(path: string): boolean {
+    return this.isActivePluginPath(path) || isMetadataPath(normalizePath(path));
+  }
 }
 
 interface ArchiveOperation {
@@ -260,10 +267,13 @@ interface ArchiveOperation {
   data: Uint8Array;
 }
 
-function treeToTrackedFiles(tree: GitLabTreeItem[]): Record<string, TrackedFile> {
+function treeToTrackedFiles(
+  tree: GitLabTreeItem[],
+  isHardExcluded: (path: string) => boolean,
+): Record<string, TrackedFile> {
   return Object.fromEntries(
     tree
-      .filter((item) => item.type === "blob")
+      .filter((item) => item.type === "blob" && !isHardExcluded(item.path))
       .map((item) => [
         normalizePath(item.path),
         {
@@ -285,4 +295,9 @@ function cloneTrackedFiles(
 
 function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
+function isMetadataPath(path: string): boolean {
+  return path.endsWith("github-sync-metadata.json") ||
+    path.endsWith("gitlab-sync-metadata.json");
 }
