@@ -27,6 +27,7 @@ interface RequestUrlResponse {
   json?: unknown;
   arrayBuffer?: ArrayBuffer;
   headers?: Record<string, string>;
+  text?: string;
 }
 
 interface RequestUrlOptions {
@@ -182,17 +183,27 @@ export class GitLabClient {
     let attempt = 0;
 
     while (true) {
-      const response = (await requestUrl({
-        url: await this.requestUrl(path, options.method ?? "GET"),
-        method: options.method ?? "GET",
-        headers: this.headers(),
-        body: options.body,
-        throw: false,
-      })) as RequestUrlResponse;
+      const method = options.method ?? "GET";
+      const url = await this.requestUrl(path, method);
+      let response: RequestUrlResponse;
+      try {
+        response = (await requestUrl({
+          url,
+          method,
+          headers: this.headers(),
+          body: options.body,
+          throw: false,
+        })) as RequestUrlResponse;
+      } catch (error) {
+        throw new GitLabApiError(
+          0,
+          `GitLab request failed before response for ${method} ${url}: ${errorMessage(error)}`,
+        );
+      }
 
       if (response.status >= 200 && response.status < 300) {
         return {
-          json: response.json as T,
+          json: this.safeJson<T>(response, method, url),
           arrayBuffer: response.arrayBuffer as ArrayBuffer,
           headers: response.headers,
         };
@@ -208,7 +219,7 @@ export class GitLabClient {
         continue;
       }
 
-      throw this.toError(response);
+      throw this.toError(response, method, url);
     }
   }
 
@@ -232,8 +243,8 @@ export class GitLabClient {
     };
   }
 
-  private toError(response: RequestUrlResponse): Error {
-    const message = this.errorMessage(response);
+  private toError(response: RequestUrlResponse, method: string, url: string): Error {
+    const message = this.errorMessage(response, method, url);
 
     switch (response.status) {
       case 401:
@@ -254,14 +265,39 @@ export class GitLabClient {
     }
   }
 
-  private errorMessage(response: RequestUrlResponse): string {
-    const bodyMessage =
-      response.json &&
-      typeof response.json === "object" &&
-      "message" in response.json
-        ? String((response.json as { message: unknown }).message)
-        : null;
-    return bodyMessage ?? `GitLab request failed with status ${response.status}`;
+  private safeJson<T>(
+    response: RequestUrlResponse,
+    method: string,
+    url: string,
+  ): T {
+    try {
+      return response.json as T;
+    } catch (error) {
+      throw new GitLabApiError(
+        response.status,
+        `GitLab returned non-JSON success response for ${method} ${url}: ${errorMessage(error)}`,
+      );
+    }
+  }
+
+  private errorMessage(response: RequestUrlResponse, method: string, url: string): string {
+    let bodyMessage: string | null = null;
+    try {
+      const json = response.json;
+      bodyMessage =
+        json &&
+        typeof json === "object" &&
+        "message" in json
+          ? String((json as { message: unknown }).message)
+          : null;
+    } catch {
+      bodyMessage = null;
+    }
+
+    const preview = responsePreview(response);
+    const suffix = preview ? ` Body preview: ${preview}` : "";
+    return bodyMessage ??
+      `GitLab request failed with status ${response.status} for ${method} ${url}.${suffix}`;
   }
 
   private header(
@@ -328,4 +364,26 @@ function decodedBase64Bytes(value: string): number {
       ? 1
       : 0;
   return Math.floor((normalized.length * 3) / 4) - padding;
+}
+
+function responsePreview(response: RequestUrlResponse): string {
+  if (typeof response.text === "string") {
+    return trimPreview(response.text);
+  }
+  if (response.arrayBuffer) {
+    try {
+      return trimPreview(new TextDecoder().decode(response.arrayBuffer));
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function trimPreview(value: string): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, 240);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

@@ -11,6 +11,7 @@ export interface FakeRequestUrlResponse {
   json?: unknown;
   arrayBuffer?: ArrayBuffer;
   headers?: Record<string, string>;
+  text?: string;
 }
 
 export class FakeRequestUrl {

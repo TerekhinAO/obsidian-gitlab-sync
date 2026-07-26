@@ -252,6 +252,33 @@ describe("GitLabClient", () => {
     }
   });
 
+  it("reports URL and body preview when GitLab returns non-JSON error content", async () => {
+    const response: any = {
+      status: 403,
+      headers: { "Content-Type": "text/plain" },
+      text: "Test access denied page",
+    };
+    Object.defineProperty(response, "json", {
+      get: () => {
+        throw new SyntaxError('JSON Parse error: Unexpected identifier "Test"');
+      },
+    });
+    fake.queue(response);
+
+    const error = await new GitLabClient(settings, "token")
+      .getBranch()
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(GitLabForbiddenError);
+    expect(error.message).toContain("GitLab request failed with status 403");
+    expect(error.message).toContain(
+      "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/branches/main",
+    );
+    expect(error.message).toContain("Test access denied page");
+    expect(error.message).not.toContain("PRIVATE-TOKEN");
+    expect(error.message).not.toContain("token");
+  });
+
   it("retries transient 5xx responses with bounded exponential backoff", async () => {
     const sleep = vi.fn().mockResolvedValue(undefined);
     fake.queue({ status: 502, json: { message: "bad gateway" } });
