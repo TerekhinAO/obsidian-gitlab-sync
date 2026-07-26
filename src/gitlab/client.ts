@@ -34,6 +34,7 @@ interface RequestUrlOptions {
   url: string;
   method?: string;
   headers?: Record<string, string>;
+  contentType?: string;
   body?: string;
   throw?: boolean;
 }
@@ -159,13 +160,14 @@ export class GitLabClient {
 
     return await this.requestJson<CreatedGitLabCommit>("/repository/commits", {
       method: "POST",
+      contentType: "application/json",
       body,
     });
   }
 
   private async requestJson<T>(
     path: string,
-    options: Pick<RequestUrlOptions, "method" | "body"> = {},
+    options: Pick<RequestUrlOptions, "method" | "body" | "contentType"> = {},
   ): Promise<T> {
     const response = await this.requestJsonResponse<T>(path, options);
     return response.json;
@@ -178,21 +180,21 @@ export class GitLabClient {
 
   private async requestJsonResponse<T>(
     path: string,
-    options: Pick<RequestUrlOptions, "method" | "body"> = {},
+    options: Pick<RequestUrlOptions, "method" | "body" | "contentType"> = {},
   ): Promise<{ json: T; arrayBuffer: ArrayBuffer; headers?: Record<string, string> }> {
     return await this.request(path, options, "json");
   }
 
   private async requestArrayBufferResponse(
     path: string,
-    options: Pick<RequestUrlOptions, "method" | "body"> = {},
+    options: Pick<RequestUrlOptions, "method" | "body" | "contentType"> = {},
   ): Promise<{ json: never; arrayBuffer: ArrayBuffer; headers?: Record<string, string> }> {
     return await this.request(path, options, "arrayBuffer");
   }
 
   private async request<T>(
     path: string,
-    options: Pick<RequestUrlOptions, "method" | "body">,
+    options: Pick<RequestUrlOptions, "method" | "body" | "contentType">,
     responseType: "json" | "arrayBuffer",
   ): Promise<{ json: T; arrayBuffer: ArrayBuffer; headers?: Record<string, string> }> {
     let attempt = 0;
@@ -206,6 +208,7 @@ export class GitLabClient {
           url,
           method,
           headers: this.headers(),
+          contentType: options.contentType,
           body: options.body,
           throw: false,
         })) as RequestUrlResponse;

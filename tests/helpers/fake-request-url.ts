@@ -2,6 +2,7 @@ export interface FakeRequestUrlOptions {
   url: string;
   method?: string;
   headers?: Record<string, string>;
+  contentType?: string;
   body?: string | ArrayBuffer;
   throw?: boolean;
 }

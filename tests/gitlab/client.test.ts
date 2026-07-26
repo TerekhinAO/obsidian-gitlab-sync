@@ -204,6 +204,7 @@ describe("GitLabClient", () => {
     expect(fake.calls[2].url).toBe(
       "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/files/folder%2Fnote.md/raw?ref=main",
     );
+    expect(fake.calls[6].contentType).toBe("application/json");
     expect(JSON.parse(fake.calls[6].body as string)).toEqual({
       branch: "main",
       commit_message: "sync",
