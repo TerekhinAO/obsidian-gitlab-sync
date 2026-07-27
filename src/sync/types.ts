@@ -1,6 +1,6 @@
 export type DirtyOperation = "upsert" | "delete";
 export type LogLevel = "off" | "error" | "info" | "debug";
-export type ConflictStrategy = "remote" | "local";
+export type ConflictStrategy = "remote" | "local" | "auto-remote" | "auto-local";
 
 export interface DirtyEntry {
   path: string;

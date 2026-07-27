@@ -86,6 +86,14 @@ export class ConflictResolver {
       return;
     }
 
+    if (isAutoStrategy(this.strategy)) {
+      const merged = autoMergeText(snapshot.path, base, snapshot.local, remote);
+      if (merged !== null) {
+        await commitAndMaterializeOriginal(snapshot.path, merged, remote.exists, plan);
+        return;
+      }
+    }
+
     await preserveBoth(
       snapshot.path,
       snapshot.local,
@@ -94,7 +102,7 @@ export class ConflictResolver {
       deviceName,
       occupied,
       plan,
-      this.strategy,
+      fallbackStrategy(this.strategy),
     );
   }
 
@@ -118,7 +126,7 @@ export class ConflictResolver {
       deviceName,
       occupied,
       plan,
-      this.strategy,
+      fallbackStrategy(this.strategy),
     );
   }
 }
@@ -142,6 +150,23 @@ async function commitOriginal(
     encoding: "base64",
   });
   plan.nextIndexMutations.push({ type: "set", path, file: await trackedFile(local.bytes) });
+}
+
+async function commitAndMaterializeOriginal(
+  path: string,
+  bytes: Uint8Array,
+  remoteExists: boolean,
+  plan: ConflictResolutionPlan,
+): Promise<void> {
+  const content = toBase64(bytes);
+  plan.commitActions.push({
+    action: remoteExists ? "update" : "create",
+    file_path: path,
+    content,
+    encoding: "base64",
+  });
+  plan.materializeOperations.push({ type: "write", path, contentBase64: content });
+  plan.nextIndexMutations.push({ type: "set", path, file: await trackedFile(bytes) });
 }
 
 async function preserveBoth(
@@ -468,6 +493,180 @@ function isProbablyText(path: string, bytes: Uint8Array): boolean {
 
   const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   return !decoded.includes("\uFFFD");
+}
+
+function isAutoStrategy(strategy: ConflictStrategy): boolean {
+  return strategy === "auto-remote" || strategy === "auto-local";
+}
+
+function fallbackStrategy(strategy: ConflictStrategy): "remote" | "local" {
+  if (strategy === "local" || strategy === "auto-local") {
+    return "local";
+  }
+  return "remote";
+}
+
+function autoMergeText(
+  path: string,
+  base: VersionState,
+  local: VersionState,
+  remote: VersionState,
+): Uint8Array | null {
+  if (
+    !base.exists ||
+    base.bytes === null ||
+    !local.exists ||
+    local.bytes === null ||
+    !remote.exists ||
+    remote.bytes === null ||
+    !isProbablyText(path, base.bytes) ||
+    !isProbablyText(path, local.bytes) ||
+    !isProbablyText(path, remote.bytes)
+  ) {
+    return null;
+  }
+
+  const merged = mergeTextVersions(
+    versionText(base),
+    versionText(local),
+    versionText(remote),
+  );
+  return merged === null ? null : new TextEncoder().encode(merged);
+}
+
+interface TextEdit {
+  start: number;
+  end: number;
+  lines: string[];
+}
+
+function mergeTextVersions(
+  baseText: string,
+  localText: string,
+  remoteText: string,
+): string | null {
+  const baseLines = baseText.split("\n");
+  const localEdits = diffTextEdits(baseLines, localText.split("\n"));
+  const remoteEdits = diffTextEdits(baseLines, remoteText.split("\n"));
+
+  if (editsConflict(localEdits, remoteEdits)) {
+    return null;
+  }
+
+  const mergedEdits = [...remoteEdits, ...localEdits]
+    .sort((left, right) => left.start - right.start || left.end - right.end);
+  const mergedLines: string[] = [];
+  let cursor = 0;
+
+  for (const edit of mergedEdits) {
+    if (edit.start < cursor) {
+      return null;
+    }
+    mergedLines.push(...baseLines.slice(cursor, edit.start));
+    mergedLines.push(...edit.lines);
+    cursor = edit.end;
+  }
+
+  mergedLines.push(...baseLines.slice(cursor));
+  return mergedLines.join("\n");
+}
+
+function diffTextEdits(baseLines: string[], changedLines: string[]): TextEdit[] {
+  const lcs = lcsTable(baseLines, changedLines);
+  const edits: TextEdit[] = [];
+  let baseIndex = 0;
+  let changedIndex = 0;
+
+  while (baseIndex < baseLines.length || changedIndex < changedLines.length) {
+    if (
+      baseIndex < baseLines.length &&
+      changedIndex < changedLines.length &&
+      baseLines[baseIndex] === changedLines[changedIndex]
+    ) {
+      baseIndex += 1;
+      changedIndex += 1;
+      continue;
+    }
+
+    const start = baseIndex;
+    const replacement: string[] = [];
+    while (baseIndex < baseLines.length || changedIndex < changedLines.length) {
+      if (
+        baseIndex < baseLines.length &&
+        changedIndex < changedLines.length &&
+        baseLines[baseIndex] === changedLines[changedIndex]
+      ) {
+        break;
+      }
+
+      const skipChanged = changedIndex < changedLines.length
+        ? lcs[baseIndex][changedIndex + 1] ?? 0
+        : -1;
+      const skipBase = baseIndex < baseLines.length
+        ? lcs[baseIndex + 1]?.[changedIndex] ?? 0
+        : -1;
+
+      if (changedIndex < changedLines.length && skipChanged >= skipBase) {
+        replacement.push(changedLines[changedIndex]);
+        changedIndex += 1;
+      } else {
+        baseIndex += 1;
+      }
+    }
+
+    edits.push({ start, end: baseIndex, lines: replacement });
+  }
+
+  return edits;
+}
+
+function editsConflict(left: TextEdit[], right: TextEdit[]): boolean {
+  for (const leftEdit of left) {
+    for (const rightEdit of right) {
+      if (sameEditRange(leftEdit, rightEdit) && sameStringArray(leftEdit.lines, rightEdit.lines)) {
+        continue;
+      }
+      if (sameInsertionPoint(leftEdit, rightEdit) || rangesOverlap(leftEdit, rightEdit)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function sameEditRange(left: TextEdit, right: TextEdit): boolean {
+  return left.start === right.start && left.end === right.end;
+}
+
+function sameInsertionPoint(left: TextEdit, right: TextEdit): boolean {
+  return left.start === left.end &&
+    right.start === right.end &&
+    left.start === right.start;
+}
+
+function rangesOverlap(left: TextEdit, right: TextEdit): boolean {
+  return left.start < right.end && right.start < left.end;
+}
+
+function sameStringArray(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((line, index) => line === right[index]);
+}
+
+function lcsTable(left: string[], right: string[]): number[][] {
+  const table = Array.from(
+    { length: left.length + 1 },
+    () => Array<number>(right.length + 1).fill(0),
+  );
+
+  for (let leftIndex = left.length - 1; leftIndex >= 0; leftIndex -= 1) {
+    for (let rightIndex = right.length - 1; rightIndex >= 0; rightIndex -= 1) {
+      table[leftIndex][rightIndex] = left[leftIndex] === right[rightIndex]
+        ? table[leftIndex + 1][rightIndex + 1] + 1
+        : Math.max(table[leftIndex + 1][rightIndex], table[leftIndex][rightIndex + 1]);
+    }
+  }
+
+  return table;
 }
 
 function toBase64(bytes: Uint8Array): string {

@@ -365,6 +365,73 @@ describe("ConflictResolver", () => {
     expect(conflictContent).toContain("+ iPhone: local line");
   });
 
+  it("auto-merges non-overlapping text changes into the original path", async () => {
+    const plan = await new ConflictResolver({ strategy: "auto-remote" }).resolve({
+      snapshots: [snapshot(
+        "note.md",
+        present(["# Title", "shared", "local edit", "end"].join("\n")),
+        present(["# Title", "shared", "base local", "end"].join("\n")),
+      )],
+      remote: {
+        "note.md": present(["# Title", "remote edit", "base local", "end"].join("\n")),
+      },
+      trackedFiles: {},
+      now,
+    });
+    const merged = ["# Title", "remote edit", "local edit", "end"].join("\n");
+
+    expect(plan.commitActions).toEqual([{
+      action: "update",
+      file_path: "note.md",
+      content: base64(merged),
+      encoding: "base64",
+    }]);
+    expect(plan.materializeOperations).toEqual([{
+      type: "write",
+      path: "note.md",
+      contentBase64: base64(merged),
+    }]);
+    expect(plan.conflictPaths).toEqual([]);
+    expect(plan.nextIndexMutations).toEqual([{
+      type: "set",
+      path: "note.md",
+      file: tracked(merged),
+    }]);
+  });
+
+  it("falls back to remote when auto-merge text changes overlap", async () => {
+    const plan = await new ConflictResolver({ strategy: "auto-remote" }).resolve({
+      snapshots: [snapshot("note.md", present("local line"), present("base line"))],
+      remote: { "note.md": present("remote line") },
+      trackedFiles: {},
+      now,
+    });
+
+    expect(plan.materializeOperations[0]).toEqual({
+      type: "write",
+      path: "note.md",
+      contentBase64: base64("remote line"),
+    });
+    expect(plan.conflictPaths).toEqual(["note — conflict iPhone 2026-07-26 20-15.md"]);
+  });
+
+  it("falls back to local when auto-merge text changes overlap", async () => {
+    const plan = await new ConflictResolver({ strategy: "auto-local" }).resolve({
+      snapshots: [snapshot("note.md", present("local line"), present("base line"))],
+      remote: { "note.md": present("remote line") },
+      trackedFiles: {},
+      now,
+    });
+
+    expect(plan.commitActions[0]).toEqual({
+      action: "update",
+      file_path: "note.md",
+      content: base64("local line"),
+      encoding: "base64",
+    });
+    expect(plan.conflictPaths).toEqual(["note — conflict GitLab 2026-07-26 20-15.md"]);
+  });
+
   it("keeps binary content base64 encoded in actions and materialization", async () => {
     const binary = new Uint8Array([0, 255, 10, 13]);
     const plan = await new ConflictResolver().resolve({

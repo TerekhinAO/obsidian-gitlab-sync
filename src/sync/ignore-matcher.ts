@@ -58,6 +58,14 @@ export class IgnoreMatcher {
     return ignored;
   }
 
+  isDirIgnored(path: string): boolean {
+    const normalized = normalizePath(path);
+    if (this.isHardExcluded(normalized)) {
+      return true;
+    }
+    return dirIgnoredByRuleSets(normalized, this.ruleSets);
+  }
+
   private async loadDirectory(dir: string, ruleSets: IgnoreRuleSet[]): Promise<void> {
     const gitignorePath = dir ? `${dir}/.gitignore` : ".gitignore";
     if (await this.vault.adapter.exists(gitignorePath)) {
@@ -69,9 +77,17 @@ export class IgnoreMatcher {
 
     const { folders } = await this.vault.adapter.list(dir);
     for (const folder of folders.map((path) => normalizePath(path)).sort()) {
-      if (!this.isHardExcluded(folder)) {
-        await this.loadDirectory(folder, ruleSets);
+      if (this.isHardExcluded(folder)) {
+        continue;
       }
+      // Prune ignored directories during descent so we never list (and stat)
+      // their contents — a broken symlink inside an ignored dir must not abort
+      // the whole traversal. Rules from ancestors are already loaded because we
+      // recurse top-down after adding each directory's .gitignore.
+      if (dirIgnoredByRuleSets(folder, ruleSets)) {
+        continue;
+      }
+      await this.loadDirectory(folder, ruleSets);
     }
   }
 
@@ -87,6 +103,27 @@ export class IgnoreMatcher {
       path.startsWith(runtimeDir)
     );
   }
+}
+
+function dirIgnoredByRuleSets(dir: string, ruleSets: IgnoreRuleSet[]): boolean {
+  const normalized = normalizePath(dir);
+  let ignored = false;
+  for (const ruleSet of ruleSets) {
+    const relativePath = relativeToRuleSet(normalized, ruleSet.dir);
+    if (relativePath === null || relativePath === "") {
+      continue;
+    }
+    // Trailing slash makes directory-only rules (e.g. ".venv/") match the
+    // directory path itself; without it the `ignore` lib reports not-ignored.
+    const result = ruleSet.matcher.test(`${relativePath}/`);
+    if (result.ignored) {
+      ignored = true;
+    }
+    if (result.unignored) {
+      ignored = false;
+    }
+  }
+  return ignored;
 }
 
 function isMetadataPath(path: string): boolean {

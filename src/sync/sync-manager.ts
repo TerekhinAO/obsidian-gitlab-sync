@@ -68,6 +68,7 @@ interface RemoteDiffLike {
 interface IgnoreMatcherLike {
   reload(): Promise<void>;
   isIgnored(path: string, trackedFiles: Record<string, TrackedFile>): boolean;
+  isDirIgnored?(path: string): boolean;
 }
 
 interface LocalSnapshotLike {
@@ -541,7 +542,7 @@ export class SyncManager {
       projectPath: settings.projectPath.trim(),
       branch: settings.branch.trim(),
       tokenSecretName: settings.tokenSecretName.trim(),
-      conflictStrategy: settings.conflictStrategy === "local" ? "local" : "remote",
+      conflictStrategy: normalizeConflictStrategy(settings.conflictStrategy),
     };
   }
 
@@ -679,7 +680,7 @@ export class SyncManager {
     const data = await this.options.stateStore.load();
     const ignoreMatcher = this.createIgnoreMatcher();
     await ignoreMatcher.reload();
-    const localFiles = await this.listLocalFiles("");
+    const localFiles = await this.listLocalFiles("", ignoreMatcher);
     const localSet = new Set(localFiles);
     const journal = this.getJournal();
 
@@ -702,14 +703,19 @@ export class SyncManager {
     }
   }
 
-  private async listLocalFiles(dir: string): Promise<string[]> {
+  private async listLocalFiles(dir: string, ignoreMatcher?: IgnoreMatcherLike): Promise<string[]> {
     if (!this.options.vault) {
       return [];
     }
     const { files, folders } = await this.options.vault.adapter.list(dir);
     const visibleFiles = files.map((path) => normalizePath(path)).filter((path) => !this.isHardExcluded(path));
     for (const folder of folders.map((path) => normalizePath(path)).filter((path) => !this.isHardExcluded(path))) {
-      visibleFiles.push(...(await this.listLocalFiles(folder)));
+      // Prune ignored directories during descent so their contents are never
+      // listed/stat-ed (avoids aborting on broken symlinks inside them).
+      if (ignoreMatcher?.isDirIgnored?.(folder)) {
+        continue;
+      }
+      visibleFiles.push(...(await this.listLocalFiles(folder, ignoreMatcher)));
     }
     return visibleFiles.sort();
   }
@@ -795,6 +801,19 @@ function treeToTrackedFiles(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function normalizeConflictStrategy(
+  strategy: GitLabSyncSettings["conflictStrategy"],
+): GitLabSyncSettings["conflictStrategy"] {
+  if (
+    strategy === "local" ||
+    strategy === "auto-remote" ||
+    strategy === "auto-local"
+  ) {
+    return strategy;
+  }
+  return "remote";
 }
 
 class BranchRaceError extends Error {

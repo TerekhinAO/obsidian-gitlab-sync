@@ -47,6 +47,14 @@ It remains licensed under AGPL-3.0-only.
 
 The GitLab token is stored in Obsidian SecretStorage. It is not stored in plugin data, logs, conflict files, URLs, or GitLab commits. Logs redact credential-shaped fields such as `PRIVATE-TOKEN`, `Authorization`, `token`, and `password`.
 
+## Development
+
+- Install dependencies with `pnpm install`.
+- `pnpm build` type-checks (`tsc -noEmit -skipLibCheck`) and bundles the production plugin with esbuild. The bundle is written to the repository root as `main.js`; this is what `release.yml` publishes alongside `manifest.json` and `styles.css`.
+- The deployable plugin bundle is staged in `dist/obsidian-plugin/gitlab-gitless-sync/`. After a build, copy `main.js`, `manifest.json`, and `styles.css` into that folder. It mirrors the layout of an Obsidian plugin directory, so its contents drop straight into a vault's `.obsidian/plugins/gitlab-gitless-sync/`.
+- `main.js` and `dist/` are git-ignored build artifacts and are never committed.
+- Run the test suite with `pnpm test` (Vitest).
+
 ## Fork Attribution
 
 This fork preserves the upstream AGPL-3.0-only license and attribution. See `THIRD_PARTY_NOTICES.md` for the upstream URL and base commit.

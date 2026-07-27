@@ -245,9 +245,14 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
         dropdown
           .addOption("remote", "Remote")
           .addOption("local", "Local")
+          .addOption("auto-remote", "Auto merge, fallback Remote")
+          .addOption("auto-local", "Auto merge, fallback Local")
           .setValue(this.plugin.settings.conflictStrategy)
           .onChange(async (value) => {
-            this.plugin.settings.conflictStrategy = value === "local" ? "local" : "remote";
+            this.plugin.settings.conflictStrategy =
+              value === "local" || value === "auto-remote" || value === "auto-local"
+                ? value
+                : "remote";
             await this.plugin.saveSettings();
           }),
       );
