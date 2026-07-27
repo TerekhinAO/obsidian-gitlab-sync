@@ -26,11 +26,6 @@ interoperable with an ordinary desktop Git workflow against the same branch.
 Once available in the Obsidian Community Plugins registry: open **Settings → Community plugins →
 Browse**, search for **GitLab Gitless Sync**, install and enable it.
 
-### BRAT (beta / early access)
-
-1. Install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) plugin.
-2. In BRAT, add the beta repository `TerekhinAO/obsidian-gitlab-gitless-sync`.
-
 ### Manual
 
 Download `main.js`, `manifest.json`, and `styles.css` from the
