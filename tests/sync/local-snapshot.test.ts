@@ -65,6 +65,27 @@ describe("LocalSnapshotService", () => {
     expect(getRawBlob).not.toHaveBeenCalled();
   });
 
+  it("skips directory entries instead of reading them as files", async () => {
+    const fakeVault = {
+      adapter: {
+        exists: vi.fn(async (path: string) => path === "note.md" || path === "SomeFolder"),
+        readBinary: vi.fn(async () => arrayBuffer(bytes("data"))),
+        stat: vi.fn(async (path: string) => ({
+          type: path === "SomeFolder" ? "folder" : "file",
+        })),
+      },
+    };
+    const getRawBlob = vi.fn(async () => null);
+
+    const result = await new LocalSnapshotService(fakeVault as any, getRawBlob).snapshot(
+      [dirty("SomeFolder", "upsert"), dirty("note.md", "upsert")],
+      {},
+    );
+
+    expect(result.map((entry) => entry.path)).toEqual(["note.md"]);
+    expect(fakeVault.adapter.readBinary).not.toHaveBeenCalledWith("SomeFolder");
+  });
+
   it("uses an unknown base when the tracked blob cannot be fetched", async () => {
     const fakeVault = vault({ "note.md": bytes("mine") });
     const getRawBlob = vi.fn(async () => null);

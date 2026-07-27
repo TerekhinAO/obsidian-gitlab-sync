@@ -58,6 +58,23 @@ describe("ChangeJournal", () => {
     ]);
   });
 
+  it("ignores folder events so directories never enter the journal", async () => {
+    const { store } = fakeStore();
+    const { vault, emit } = fakeVault();
+    const journal = new ChangeJournal({ vault: vault as any, stateStore: store, now: () => 1 });
+
+    journal.start();
+    emit("create", { path: "People/Sergey", children: [] });
+    emit("rename", { path: "People/Renamed", children: [] }, "People/Old");
+    emit("delete", { path: "People/Removed", children: [] });
+    emit("modify", { path: "People/Sergey/note.md" });
+    await journal.stop();
+
+    expect(journal.list()).toEqual([
+      { path: "People/Sergey/note.md", operation: "upsert", recordedAt: 1 },
+    ]);
+  });
+
   it("collapses repeated events by path", async () => {
     const { store } = fakeStore();
     const { vault } = fakeVault();

@@ -40,10 +40,22 @@ export class ChangeJournal {
     this.started = true;
     const { vault, plugin } = this.options;
     const refs = [
-      vault.on("create", (file) => void this.recordUpsert(file.path)),
-      vault.on("modify", (file) => void this.recordUpsert(file.path)),
-      vault.on("delete", (file) => void this.recordDelete(file.path)),
-      vault.on("rename", (file, oldPath) => void this.recordRename(oldPath, file.path)),
+      vault.on("create", (file) => {
+        if (isFolder(file)) return;
+        void this.recordUpsert(file.path);
+      }),
+      vault.on("modify", (file) => {
+        if (isFolder(file)) return;
+        void this.recordUpsert(file.path);
+      }),
+      vault.on("delete", (file) => {
+        if (isFolder(file)) return;
+        void this.recordDelete(file.path);
+      }),
+      vault.on("rename", (file, oldPath) => {
+        if (isFolder(file)) return;
+        void this.recordRename(oldPath, file.path);
+      }),
     ];
     refs.forEach((ref) => plugin?.registerEvent(ref));
   }
@@ -145,6 +157,14 @@ export class ChangeJournal {
       path.startsWith(runtimeDir)
     );
   }
+}
+
+// Obsidian fires create/modify/delete/rename for TFolder as well as TFile.
+// Only TFolder carries a `children` array, so use it to skip directories —
+// a directory path must never become a dirty entry (it cannot be read as a
+// file and would fail the sync snapshot with EISDIR).
+function isFolder(file: TAbstractFile): boolean {
+  return typeof file === "object" && file !== null && "children" in file;
 }
 
 function isMetadataPath(path: string): boolean {

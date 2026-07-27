@@ -16,6 +16,7 @@ interface SnapshotVault {
   adapter: {
     exists(path: string): Promise<boolean>;
     readBinary(path: string): Promise<ArrayBuffer>;
+    stat?(path: string): Promise<{ type: "file" | "folder" } | null>;
   };
 }
 
@@ -40,6 +41,12 @@ export class LocalSnapshotService {
         continue;
       }
 
+      // A directory can never be read as a file; skip it so a stray folder
+      // dirty entry does not abort the sync with EISDIR.
+      if (entry.operation !== "delete" && (await this.isDirectory(entry.path))) {
+        continue;
+      }
+
       snapshots.push({
         path: entry.path,
         operation: entry.operation,
@@ -49,6 +56,15 @@ export class LocalSnapshotService {
     }
 
     return snapshots;
+  }
+
+  private async isDirectory(path: string): Promise<boolean> {
+    const stat = this.vault.adapter.stat;
+    if (!stat) {
+      return false;
+    }
+    const info = await stat.call(this.vault.adapter, path);
+    return info?.type === "folder";
   }
 
   private async readLocal(entry: DirtyEntry): Promise<VersionState> {

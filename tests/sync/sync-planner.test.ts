@@ -73,7 +73,10 @@ describe("SyncPlanner", () => {
   });
 
   it("turns local-only creates, updates, and deletes into GitLab batch actions with optimistic locks", async () => {
-    const planner = plannerWithRemote({}, {
+    const planner = plannerWithRemote({
+      "updated.md": present("old"),
+      "deleted.md": present("delete me"),
+    }, {
       "updated.md": "remote-update-last-commit",
       "deleted.md": "remote-delete-last-commit",
     });
@@ -117,6 +120,40 @@ describe("SyncPlanner", () => {
       "updated.md": tracked("updated"),
     });
     expect(plan.acknowledgedDirtyPaths).toEqual(["created.md", "updated.md", "deleted.md"]);
+  });
+
+  it("drops stale delete actions and rewrites updates for files missing from the remote head", async () => {
+    const planner = plannerWithRemote({
+      "present.md": present("remote"),
+      // "gone.md" and "phantom.md" are absent from the remote head.
+    });
+
+    const plan = await planner.plan({
+      baseSha: "base",
+      remoteSha: "remote",
+      trackedFiles: {
+        "gone.md": tracked("stale"),
+        "present.md": tracked("old"),
+        "phantom.md": tracked("stale2"),
+      },
+      dirtyEntries: [
+        dirty("gone.md", "delete"),
+        dirty("present.md", "delete"),
+        dirty("phantom.md", "upsert"),
+      ],
+      remoteChanges: [],
+      localSnapshots: [
+        snapshot("gone.md", missing(), present("stale")),
+        snapshot("present.md", missing(), present("old")),
+        snapshot("phantom.md", present("new"), present("stale2")),
+      ],
+      now,
+    });
+
+    expect(plan.actions).toEqual([
+      { action: "delete", file_path: "present.md" },
+      { action: "create", file_path: "phantom.md", content: base64("new"), encoding: "base64" },
+    ]);
   });
 
   it("creates conflict files in GitLab and materializes remote content only after the commit succeeds", async () => {

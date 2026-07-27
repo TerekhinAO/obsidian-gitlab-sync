@@ -140,6 +140,22 @@ export class SyncPlanner {
         continue;
       }
 
+      // Reconcile update/delete against the actual remote head. A stale index
+      // can emit a delete/update for a path that no longer exists remotely,
+      // which makes GitLab reject the whole atomic commit with
+      // "A file with this name doesn't exist". Drop such deletes and turn
+      // orphaned updates into creates so the commit stays valid.
+      const remote = await this.getRemoteVersion(action.file_path, remoteSha);
+      const existsInHead = remote.exists && remote.bytes !== null;
+      if (!existsInHead) {
+        if (action.action === "delete") {
+          continue;
+        }
+        const { last_commit_id: _drop, ...rest } = action;
+        locked.push({ ...rest, action: "create" });
+        continue;
+      }
+
       const lastCommitId = await this.getLastCommitId(action.file_path, remoteSha);
       if (lastCommitId === null) {
         locked.push(action);
