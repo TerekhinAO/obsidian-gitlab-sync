@@ -35,6 +35,7 @@ function blobIdBytes(value: Uint8Array): string {
 }
 
 const now = new Date("2026-07-26T20:15:00+03:00");
+const conflictStamp = formatConflictStamp(now);
 
 describe("ConflictResolver", () => {
   it.each([
@@ -68,7 +69,7 @@ describe("ConflictResolver", () => {
       remote: present("B"),
       wantActions: [{
         action: "create",
-        file_path: "note — conflict iPhone 2026-07-26 20-15.md",
+        file_path: `note — conflict iPhone ${conflictStamp}.md`,
         content: base64(report("note.md", "GitLab", "iPhone", "A", "B")),
         encoding: "base64",
       }],
@@ -76,14 +77,14 @@ describe("ConflictResolver", () => {
         { type: "write", path: "note.md", contentBase64: base64("B") },
         {
           type: "write",
-          path: "note — conflict iPhone 2026-07-26 20-15.md",
+          path: `note — conflict iPhone ${conflictStamp}.md`,
           contentBase64: base64(report("note.md", "GitLab", "iPhone", "A", "B")),
         },
       ],
-      wantConflicts: ["note — conflict iPhone 2026-07-26 20-15.md"],
+      wantConflicts: [`note — conflict iPhone ${conflictStamp}.md`],
       wantMutations: [{
         type: "set",
-        path: "note — conflict iPhone 2026-07-26 20-15.md",
+        path: `note — conflict iPhone ${conflictStamp}.md`,
         file: tracked(report("note.md", "GitLab", "iPhone", "A", "B")),
       }],
     },
@@ -128,7 +129,7 @@ describe("ConflictResolver", () => {
       remote: present("C"),
       wantActions: [{
         action: "create",
-        file_path: "note — conflict iPhone 2026-07-26 20-15.md",
+        file_path: `note — conflict iPhone ${conflictStamp}.md`,
         content: base64(report("note.md", "GitLab", "iPhone", "B", "C")),
         encoding: "base64",
       }],
@@ -136,14 +137,14 @@ describe("ConflictResolver", () => {
         { type: "write", path: "note.md", contentBase64: base64("C") },
         {
           type: "write",
-          path: "note — conflict iPhone 2026-07-26 20-15.md",
+          path: `note — conflict iPhone ${conflictStamp}.md`,
           contentBase64: base64(report("note.md", "GitLab", "iPhone", "B", "C")),
         },
       ],
-      wantConflicts: ["note — conflict iPhone 2026-07-26 20-15.md"],
+      wantConflicts: [`note — conflict iPhone ${conflictStamp}.md`],
       wantMutations: [{
         type: "set",
-        path: "note — conflict iPhone 2026-07-26 20-15.md",
+        path: `note — conflict iPhone ${conflictStamp}.md`,
         file: tracked(report("note.md", "GitLab", "iPhone", "B", "C")),
       }],
     },
@@ -166,7 +167,7 @@ describe("ConflictResolver", () => {
       remote: present("B"),
       wantActions: [{
         action: "create",
-        file_path: "Notes/Plan — deletion conflict iPhone 2026-07-26 20-15.md",
+        file_path: `Notes/Plan — deletion conflict iPhone ${conflictStamp}.md`,
         content: base64([
           "# Sync conflict: deletion on iPhone",
           "",
@@ -181,7 +182,7 @@ describe("ConflictResolver", () => {
         { type: "write", path: "Notes/Plan.md", contentBase64: base64("B") },
         {
           type: "write",
-          path: "Notes/Plan — deletion conflict iPhone 2026-07-26 20-15.md",
+          path: `Notes/Plan — deletion conflict iPhone ${conflictStamp}.md`,
           contentBase64: base64([
             "# Sync conflict: deletion on iPhone",
             "",
@@ -192,10 +193,10 @@ describe("ConflictResolver", () => {
           ].join("\n")),
         },
       ],
-      wantConflicts: ["Notes/Plan — deletion conflict iPhone 2026-07-26 20-15.md"],
+      wantConflicts: [`Notes/Plan — deletion conflict iPhone ${conflictStamp}.md`],
       wantMutations: [{
         type: "set",
-        path: "Notes/Plan — deletion conflict iPhone 2026-07-26 20-15.md",
+        path: `Notes/Plan — deletion conflict iPhone ${conflictStamp}.md`,
         file: tracked([
           "# Sync conflict: deletion on iPhone",
           "",
@@ -214,7 +215,7 @@ describe("ConflictResolver", () => {
       remote: missing(),
       wantActions: [{
         action: "create",
-        file_path: "note — conflict iPhone 2026-07-26 20-15.md",
+        file_path: `note — conflict iPhone ${conflictStamp}.md`,
         content: base64(report("note.md", "GitLab", "iPhone", "B", "[deleted]")),
         encoding: "base64",
       }],
@@ -222,14 +223,14 @@ describe("ConflictResolver", () => {
         { type: "delete", path: "note.md" },
         {
           type: "write",
-          path: "note — conflict iPhone 2026-07-26 20-15.md",
+          path: `note — conflict iPhone ${conflictStamp}.md`,
           contentBase64: base64(report("note.md", "GitLab", "iPhone", "B", "[deleted]")),
         },
       ],
-      wantConflicts: ["note — conflict iPhone 2026-07-26 20-15.md"],
+      wantConflicts: [`note — conflict iPhone ${conflictStamp}.md`],
       wantMutations: [{
         type: "set",
-        path: "note — conflict iPhone 2026-07-26 20-15.md",
+        path: `note — conflict iPhone ${conflictStamp}.md`,
         file: tracked(report("note.md", "GitLab", "iPhone", "B", "[deleted]")),
       }],
     },
@@ -252,7 +253,7 @@ describe("ConflictResolver", () => {
       remote: present("C"),
       wantActions: [{
         action: "create",
-        file_path: "note — conflict iPhone 2026-07-26 20-15.md",
+        file_path: `note — conflict iPhone ${conflictStamp}.md`,
         content: base64(report("note.md", "GitLab", "iPhone", "B", "C")),
         encoding: "base64",
       }],
@@ -260,14 +261,14 @@ describe("ConflictResolver", () => {
         { type: "write", path: "note.md", contentBase64: base64("C") },
         {
           type: "write",
-          path: "note — conflict iPhone 2026-07-26 20-15.md",
+          path: `note — conflict iPhone ${conflictStamp}.md`,
           contentBase64: base64(report("note.md", "GitLab", "iPhone", "B", "C")),
         },
       ],
-      wantConflicts: ["note — conflict iPhone 2026-07-26 20-15.md"],
+      wantConflicts: [`note — conflict iPhone ${conflictStamp}.md`],
       wantMutations: [{
         type: "set",
-        path: "note — conflict iPhone 2026-07-26 20-15.md",
+        path: `note — conflict iPhone ${conflictStamp}.md`,
         file: tracked(report("note.md", "GitLab", "iPhone", "B", "C")),
       }],
     },
@@ -300,7 +301,7 @@ describe("ConflictResolver", () => {
 
     expect(plan.commitActions).toEqual([{
       action: "create",
-      file_path: "asset — conflict iPhone 2026-07-26 20-15.bin",
+      file_path: `asset — conflict iPhone ${conflictStamp}.bin`,
       content: Buffer.from(invalidUtf8A).toString("base64"),
       encoding: "base64",
     }]);
@@ -326,7 +327,7 @@ describe("ConflictResolver", () => {
       { type: "write", path: "note.md", contentBase64: base64("remote line") },
       {
         type: "write",
-        path: "note — conflict iPhone 2026-07-26 20-15.md",
+        path: `note — conflict iPhone ${conflictStamp}.md`,
         contentBase64: conflictBase64,
       },
     ]);
@@ -356,7 +357,7 @@ describe("ConflictResolver", () => {
     });
     expect(plan.materializeOperations).toEqual([{
       type: "write",
-      path: "note — conflict GitLab 2026-07-26 20-15.md",
+      path: `note — conflict GitLab ${conflictStamp}.md`,
       contentBase64: conflictBase64,
     }]);
     expect(conflictContent).toContain("Kept at original path: iPhone");
@@ -412,7 +413,7 @@ describe("ConflictResolver", () => {
       path: "note.md",
       contentBase64: base64("remote line"),
     });
-    expect(plan.conflictPaths).toEqual(["note — conflict iPhone 2026-07-26 20-15.md"]);
+    expect(plan.conflictPaths).toEqual([`note — conflict iPhone ${conflictStamp}.md`]);
   });
 
   it("falls back to local when auto-merge text changes overlap", async () => {
@@ -429,7 +430,7 @@ describe("ConflictResolver", () => {
       content: base64("local line"),
       encoding: "base64",
     });
-    expect(plan.conflictPaths).toEqual(["note — conflict GitLab 2026-07-26 20-15.md"]);
+    expect(plan.conflictPaths).toEqual([`note — conflict GitLab ${conflictStamp}.md`]);
   });
 
   it("keeps binary content base64 encoded in actions and materialization", async () => {
@@ -463,13 +464,13 @@ describe("ConflictResolver", () => {
       snapshots: [snapshot("README", present("mine"), present("base"))],
       remote: { README: present("remote") },
       trackedFiles: {
-        "README — conflict iPhone 2026-07-26 20-15": tracked("occupied"),
-        "README — conflict iPhone 2026-07-26 20-15-2": tracked("occupied"),
+        [`README — conflict iPhone ${conflictStamp}`]: tracked("occupied"),
+        [`README — conflict iPhone ${conflictStamp}-2`]: tracked("occupied"),
       },
       now,
     });
 
-    expect(plan.conflictPaths).toEqual(["README — conflict iPhone 2026-07-26 20-15-3"]);
+    expect(plan.conflictPaths).toEqual([`README — conflict iPhone ${conflictStamp}-3`]);
   });
 });
 
@@ -479,6 +480,15 @@ function present(text: string): VersionState {
 
 function missing(): VersionState {
   return { exists: false, bytes: null };
+}
+
+function formatConflictStamp(date: Date): string {
+  const pad = (value: number) => value.toString().padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join("-") + ` ${pad(date.getHours())}-${pad(date.getMinutes())}`;
 }
 
 function tracked(text: string): TrackedFile {

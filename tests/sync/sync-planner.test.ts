@@ -6,6 +6,7 @@ import type { LocalSnapshotEntry, VersionState } from "../../src/sync/local-snap
 import type { DirtyEntry, TrackedFile } from "../../src/sync/types";
 
 const now = new Date("2026-07-26T20:15:00+03:00");
+const conflictStamp = formatConflictStamp(now);
 
 describe("SyncPlanner", () => {
   it("returns an empty plan when remote and local have no effective changes", async () => {
@@ -201,19 +202,19 @@ describe("SyncPlanner", () => {
     expect(plan.actions).toEqual([
       {
         action: "create",
-        file_path: "note — conflict iPhone 2026-07-26 20-15.md",
+        file_path: `note — conflict iPhone ${conflictStamp}.md`,
         content: base64(noteReport),
         encoding: "base64",
       },
       {
         action: "create",
-        file_path: "deleted-remotely — conflict iPhone 2026-07-26 20-15.md",
+        file_path: `deleted-remotely — conflict iPhone ${conflictStamp}.md`,
         content: base64(deletedRemoteReport),
         encoding: "base64",
       },
       {
         action: "create",
-        file_path: "remote-edited — deletion conflict iPhone 2026-07-26 20-15.md",
+        file_path: `remote-edited — deletion conflict iPhone ${conflictStamp}.md`,
         content: base64([
           "# Sync conflict: deletion on iPhone",
           "",
@@ -230,19 +231,19 @@ describe("SyncPlanner", () => {
       { type: "write", path: "note.md", contentBase64: base64("remote") },
       {
         type: "write",
-        path: "note — conflict iPhone 2026-07-26 20-15.md",
+        path: `note — conflict iPhone ${conflictStamp}.md`,
         contentBase64: base64(noteReport),
       },
       { type: "delete", path: "deleted-remotely.md" },
       {
         type: "write",
-        path: "deleted-remotely — conflict iPhone 2026-07-26 20-15.md",
+        path: `deleted-remotely — conflict iPhone ${conflictStamp}.md`,
         contentBase64: base64(deletedRemoteReport),
       },
       { type: "write", path: "remote-edited.md", contentBase64: base64("remote edit") },
       {
         type: "write",
-        path: "remote-edited — deletion conflict iPhone 2026-07-26 20-15.md",
+        path: `remote-edited — deletion conflict iPhone ${conflictStamp}.md`,
         contentBase64: base64([
           "# Sync conflict: deletion on iPhone",
           "",
@@ -254,16 +255,16 @@ describe("SyncPlanner", () => {
       },
     ]);
     expect(plan.conflictPaths).toEqual([
-      "note — conflict iPhone 2026-07-26 20-15.md",
-      "deleted-remotely — conflict iPhone 2026-07-26 20-15.md",
-      "remote-edited — deletion conflict iPhone 2026-07-26 20-15.md",
+      `note — conflict iPhone ${conflictStamp}.md`,
+      `deleted-remotely — conflict iPhone ${conflictStamp}.md`,
+      `remote-edited — deletion conflict iPhone ${conflictStamp}.md`,
     ]);
     expect(plan.nextTrackedFiles).toEqual({
       "note.md": tracked("remote"),
       "remote-edited.md": tracked("remote edit"),
-      "note — conflict iPhone 2026-07-26 20-15.md": tracked(noteReport),
-      "deleted-remotely — conflict iPhone 2026-07-26 20-15.md": tracked(deletedRemoteReport),
-      "remote-edited — deletion conflict iPhone 2026-07-26 20-15.md": tracked([
+      [`note — conflict iPhone ${conflictStamp}.md`]: tracked(noteReport),
+      [`deleted-remotely — conflict iPhone ${conflictStamp}.md`]: tracked(deletedRemoteReport),
+      [`remote-edited — deletion conflict iPhone ${conflictStamp}.md`]: tracked([
         "# Sync conflict: deletion on iPhone",
         "",
         "The file `remote-edited.md` was deleted on iPhone, but the GitLab version changed after the last successful sync.",
@@ -308,6 +309,15 @@ function present(text: string): VersionState {
 
 function missing(): VersionState {
   return { exists: false, bytes: null };
+}
+
+function formatConflictStamp(date: Date): string {
+  const pad = (value: number) => value.toString().padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join("-") + ` ${pad(date.getHours())}-${pad(date.getMinutes())}`;
 }
 
 function tracked(text: string): TrackedFile {

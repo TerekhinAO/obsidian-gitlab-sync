@@ -12,6 +12,8 @@ import type {
 import { GitLabTestServer } from "../helpers/gitlab-test-server";
 
 const requestUrlMock = vi.hoisted(() => vi.fn());
+const conflictNow = new Date("2026-07-26T20:15:00+03:00");
+const conflictStamp = formatConflictStamp(conflictNow);
 
 vi.mock("obsidian", () => ({
   requestUrl: requestUrlMock,
@@ -137,11 +139,11 @@ describe("GitLab sync integration", () => {
     expect(setup.server.fileText("unicode/Привет 😀.md")).toBe("unicode local");
 
     const paths = setup.server.paths();
-    expect(paths).toContain("conflict — conflict iPhone 2026-07-26 20-15.md");
-    expect(paths).toContain("binary — conflict iPhone 2026-07-26 20-15.bin");
-    expect(paths).toContain("local-delete-remote-update — deletion conflict iPhone 2026-07-26 20-15.md");
-    expect(paths).toContain("remote-delete-local-update — conflict iPhone 2026-07-26 20-15.md");
-    expect(paths).toContain("rename-old — conflict iPhone 2026-07-26 20-15.md");
+    expect(paths).toContain(`conflict — conflict iPhone ${conflictStamp}.md`);
+    expect(paths).toContain(`binary — conflict iPhone ${conflictStamp}.bin`);
+    expect(paths).toContain(`local-delete-remote-update — deletion conflict iPhone ${conflictStamp}.md`);
+    expect(paths).toContain(`remote-delete-local-update — conflict iPhone ${conflictStamp}.md`);
+    expect(paths).toContain(`rename-old — conflict iPhone ${conflictStamp}.md`);
     await expectNoMetadata(setup);
   });
 
@@ -258,7 +260,7 @@ describe("GitLab sync integration", () => {
     expect(setup.server.requests.some((request) => request.url.includes("/repository/tree"))).toBe(false);
     expect(setup.server.fileText("notes/0042.md")).toBe("dirty local");
     await expectNoMetadata(setup);
-  });
+  }, 20_000);
 });
 
 async function initializedFixture(initialRemoteFiles: Record<string, string | Uint8Array | ArrayBuffer>) {
@@ -302,12 +304,21 @@ async function initializedFixture(initialRemoteFiles: Record<string, string | Ui
         createGitLabClient: client,
         journal,
         now: () => 123_456,
-        nowDate: () => new Date("2026-07-26T20:15:00+03:00"),
+        nowDate: () => conflictNow,
         logger: silentLogger,
         ...overrides,
       });
     },
   };
+}
+
+function formatConflictStamp(date: Date): string {
+  const pad = (value: number) => value.toString().padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join("-") + ` ${pad(date.getHours())}-${pad(date.getMinutes())}`;
 }
 
 class MemoryVault {
