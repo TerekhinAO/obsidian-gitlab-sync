@@ -4,8 +4,7 @@
   "version": "1.0.10-beta",
   "minAppVersion": "1.7.7",
   "description": "Sync an Obsidian vault with a GitLab repository without requiring Git.",
-  "author": "Silvano Cerza",
-  "authorUrl": "https://silvanocerza.com",
-  "fundingUrl": "https://ko-fi.com/silvanocerza",
+  "author": "Alexander Terekhin",
+  "authorUrl": "https://github.com/TerekhinAO",
   "isDesktopOnly": false
 }

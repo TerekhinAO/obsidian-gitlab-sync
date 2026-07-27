@@ -1,60 +1,90 @@
 # GitLab Gitless Sync
 
-GitLab Gitless Sync is an Obsidian plugin that synchronizes a vault with one GitLab repository and branch without requiring Git on the device.
+Sync an Obsidian vault with a GitLab repository **without requiring Git on the device**.
 
-This project is a GitLab-only fork of Silvano Cerza's GitHub Gitless Sync.
-It remains licensed under AGPL-3.0-only.
+GitLab Gitless Sync keeps a vault and a single GitLab repository branch in sync using only the
+GitLab REST API. It is designed for mobile devices (where Git is unavailable) while staying fully
+interoperable with an ordinary desktop Git workflow against the same branch.
+
+## Features
+
+- No local `.git`, `isomorphic-git`, or shell Git required on the device.
+- Commits created by the plugin are ordinary Git commits — desktop users keep using normal Git.
+- Sync state is stored **locally on the device** and never committed to the repository.
+- Startup and manual sync run the same transactional engine; a normal sync does not scan or hash
+  the whole vault.
+- Root and nested `.gitignore` rules are honored; already-tracked files stay tracked.
+- Conflicts are non-destructive: the GitLab version stays at its path and the local version is
+  written as a conflict copy. Deletion conflicts create a Markdown marker instead of losing data.
+- Binary files are preserved byte-for-byte.
+- Self-managed GitLab (custom HTTPS base URL) is supported alongside GitLab.com.
 
 ## Installation
 
+### Community plugins
+
+Once available in the Obsidian Community Plugins registry: open **Settings → Community plugins →
+Browse**, search for **GitLab Gitless Sync**, install and enable it.
+
+### BRAT (beta / early access)
+
+1. Install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) plugin.
+2. In BRAT, add the beta repository `TerekhinAO/obsidian-gitlab-gitless-sync`.
+
+### Manual
+
+Download `main.js`, `manifest.json`, and `styles.css` from the
+[latest release](https://github.com/TerekhinAO/obsidian-gitlab-gitless-sync/releases) and copy them
+into `<vault>/.obsidian/plugins/gitlab-gitless-sync/`, then enable the plugin.
+
+## Getting started
+
 1. Push and verify the desktop vault in GitLab.
-2. Create a new empty Obsidian vault on iPhone.
-3. Install GitLab Gitless Sync manually or through BRAT.
-4. Create a GitLab access token limited to the vault project with repository download and push permission.
+2. Create a new **empty** Obsidian vault on the mobile device.
+3. Install and enable GitLab Gitless Sync.
+4. Create a GitLab access token scoped to the vault project with repository read and write
+   permission.
 5. Store the token through the plugin's secret input.
-6. Enter GitLab base URL, project path, branch, author name, and author email.
-7. Tap Initialize empty vault from GitLab.
-8. Keep Obsidian open until import completes.
-9. Reload Obsidian.
-10. Future syncs run at startup; use Sync with GitLab to send changes immediately.
+6. Enter the GitLab base URL, project path, branch, author name, and author email.
+7. Tap **Initialize empty vault from GitLab** and keep Obsidian open until the import completes.
+8. Reload Obsidian.
+9. Future syncs run at startup; use **Sync with GitLab** to send changes immediately.
 
-## Behavior
+## How it works
 
-- Mobile devices do not need a local `.git` directory.
-- GitLab commits created by the plugin are ordinary Git commits.
-- Desktop users keep using normal Git against the same branch.
-- Plugin sync state is local to the device and is not committed to the repository.
-- GitLab.com is the default host; self-managed HTTPS GitLab base URLs are supported.
-- Startup sync runs once after Obsidian layout is ready when the vault is initialized.
-- Manual Sync with GitLab uses the same sync engine as startup sync.
-- Full audit and sync is manual and may be slower because it scans local files.
-- Root and nested `.gitignore` files apply to untracked local files.
-- Files already tracked remain tracked even if a later ignore rule matches them.
-- Conflicts preserve both sides: the GitLab version stays at the original path and the iPhone version is written as a conflict copy.
-- Deletion conflicts are non-destructive and create a Markdown marker.
-- Binary files are preserved byte-for-byte.
+- Startup sync runs once after the Obsidian layout is ready, when the vault is initialized.
+- Manual **Sync with GitLab** uses the same engine as startup sync.
+- A full audit-and-sync is manual and may be slower because it scans local files.
+- If a remote commit succeeds but local materialization is interrupted, the next sync recovers
+  transactionally.
 
 ## Limitations
 
-- GitLab only.
-- One configured project and one branch.
-- GitLab REST API only.
-- No local Git, isomorphic-git, shell Git, iSH, merge, rebase, force push, branch switching, Git LFS, submodules, symlinks, executable-bit editing, or multiple remotes.
+- GitLab only, one configured project and one branch, REST API only.
+- No local Git, isomorphic-git, shell Git, merge, rebase, force push, branch switching, Git LFS,
+  submodules, symlinks, executable-bit editing, or multiple remotes.
 - Initial import is only supported into an empty vault.
-- Local plugin runtime files and sync state are local-only.
+- Plugin runtime files and sync state are local-only.
 
 ## Security
 
-The GitLab token is stored in Obsidian SecretStorage. It is not stored in plugin data, logs, conflict files, URLs, or GitLab commits. Logs redact credential-shaped fields such as `PRIVATE-TOKEN`, `Authorization`, `token`, and `password`.
+The GitLab token is stored in Obsidian SecretStorage. It is never written to plugin data, logs,
+conflict files, URLs, or GitLab commits. Logs redact credential-shaped fields such as
+`PRIVATE-TOKEN`, `Authorization`, `token`, and `password`.
 
 ## Development
 
-- Install dependencies with `pnpm install`.
-- `pnpm build` type-checks (`tsc -noEmit -skipLibCheck`) and bundles the production plugin with esbuild. The bundle is written to the repository root as `main.js`; this is what `release.yml` publishes alongside `manifest.json` and `styles.css`.
-- The deployable plugin bundle is staged in `dist/obsidian-plugin/gitlab-gitless-sync/`. After a build, copy `main.js`, `manifest.json`, and `styles.css` into that folder. It mirrors the layout of an Obsidian plugin directory, so its contents drop straight into a vault's `.obsidian/plugins/gitlab-gitless-sync/`.
+- Install dependencies: `pnpm install`.
+- `pnpm build` type-checks (`tsc -noEmit -skipLibCheck`) and bundles the production plugin with
+  esbuild to `main.js`.
+- `pnpm test` runs the Vitest suite.
 - `main.js` and `dist/` are git-ignored build artifacts and are never committed.
-- Run the test suite with `pnpm test` (Vitest).
 
-## Fork Attribution
+## Credits & License
 
-This fork preserves the upstream AGPL-3.0-only license and attribution. See `THIRD_PARTY_NOTICES.md` for the upstream URL and base commit.
+This project is an independently maintained GitLab rewrite, based on
+[GitHub Gitless Sync](https://github.com/silvanocerza/github-gitless-sync) by Silvano Cerza.
+Modified in 2026 by Alexander Terekhin.
+
+Licensed under **AGPL-3.0-only**. The upstream license and attribution are preserved — see
+[`LICENSE`](LICENSE) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
