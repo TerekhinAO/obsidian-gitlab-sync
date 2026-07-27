@@ -1,7 +1,7 @@
 {
   "id": "gitlab-gitless-sync",
   "name": "GitLab Gitless Sync",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "minAppVersion": "1.7.7",
   "description": "Sync an Obsidian vault with a GitLab repository without requiring Git.",
   "author": "Alexander Terekhin",

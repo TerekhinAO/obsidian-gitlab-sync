@@ -30,8 +30,15 @@ Browse**, search for **GitLab Gitless Sync**, install and enable it.
 ### Manual
 
 Download `main.js`, `manifest.json`, and `styles.css` from the
-[latest release](https://github.com/TerekhinAO/obsidian-gitlab-gitless-sync/releases) and copy them
+[latest release](https://github.com/TerekhinAO/obsidian-gitlab-sync/releases) and copy them
 into `<vault>/.obsidian/plugins/gitlab-gitless-sync/`, then enable the plugin.
+
+## Before first sync
+
+Make a backup of the vault before the first sync or adoption. The plugin preserves both sides when
+the same file changed locally and on GitLab, but normal synchronization still applies
+non-conflicting remote changes. If a file was deleted in GitLab and did not change locally, the
+local copy is deleted too.
 
 ## Getting started
 
@@ -43,6 +50,19 @@ First fill in the connection settings under **Settings → GitLab Gitless Sync**
 - **GitLab token** — an access token scoped to the project with repository read and write
   permission. It is stored in Obsidian SecretStorage, never in plugin data.
 - **Commit author** name and email.
+
+### Recommended GitLab token
+
+Create a separate token for this plugin and limit it to the project you want to sync. In GitLab,
+open **Edit profile -> Access Tokens -> Personal Access Token**, create a token for the target
+project, and grant only the permissions the plugin needs:
+
+- **Projects**: Project Read
+- **Repository**: Commit Read, Commit Create, Branch Read, Code Read, Repository Read,
+  Repository Tag Read
+
+Keep the token private. If you stop using the plugin or move the vault to another repository,
+revoke the old token in GitLab and create a new project-scoped token.
 
 Then set up the vault depending on its current state:
 

@@ -21,7 +21,7 @@ jobs:
       - name: Build plugin
         run: |
           npm install -g pnpm@latest-10
-          pnpm install
+          pnpm install --frozen-lockfile
           pnpm build
 
       - name: Create release

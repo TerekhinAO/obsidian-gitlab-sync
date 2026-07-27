@@ -1,6 +1,6 @@
 {
   "name": "gitlab-gitless-sync",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "Sync an Obsidian vault with a GitLab repository without requiring Git.",
   "main": "main.js",
   "scripts": {
@@ -14,8 +14,15 @@
     "lint": "eslint src tests",
     "check": "pnpm test && pnpm typecheck && pnpm lint && pnpm build"
   },
-  "keywords": [],
-  "author": "Silvano Cerza",
+  "keywords": [
+    "obsidian",
+    "gitlab",
+    "sync"
+  ],
+  "author": "Alexander Terekhin",
+  "contributors": [
+    "Silvano Cerza"
+  ],
   "license": "AGPL-3.0-only",
   "devDependencies": {
     "@types/node": "^22.10.5",
