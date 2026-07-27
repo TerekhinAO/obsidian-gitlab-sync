@@ -14,8 +14,9 @@ interoperable with an ordinary desktop Git workflow against the same branch.
 - Startup and manual sync run the same transactional engine; a normal sync does not scan or hash
   the whole vault.
 - Root and nested `.gitignore` rules are honored; already-tracked files stay tracked.
-- Conflicts are non-destructive: the GitLab version stays at its path and the local version is
-  written as a conflict copy. Deletion conflicts create a Markdown marker instead of losing data.
+- Conflicts are non-destructive: both versions are always preserved — the losing side becomes a
+  conflict copy, with a configurable strategy (see below). Deletion conflicts create a Markdown
+  marker instead of losing data.
 - Binary files are preserved byte-for-byte.
 - Self-managed GitLab (custom HTTPS base URL) is supported alongside GitLab.com.
 
@@ -34,24 +35,69 @@ into `<vault>/.obsidian/plugins/gitlab-gitless-sync/`, then enable the plugin.
 
 ## Getting started
 
-1. Push and verify the desktop vault in GitLab.
-2. Create a new **empty** Obsidian vault on the mobile device.
-3. Install and enable GitLab Gitless Sync.
-4. Create a GitLab access token scoped to the vault project with repository read and write
-   permission.
-5. Store the token through the plugin's secret input.
-6. Enter the GitLab base URL, project path, branch, author name, and author email.
-7. Tap **Initialize empty vault from GitLab** and keep Obsidian open until the import completes.
-8. Reload Obsidian.
-9. Future syncs run at startup; use **Sync with GitLab** to send changes immediately.
+First fill in the connection settings under **Settings → GitLab Gitless Sync**:
 
-## How it works
+- **GitLab base URL** (defaults to `https://gitlab.com`; self-managed HTTPS instances are supported).
+- **Project path** — namespace and project path in GitLab, for example `developing/obsidian-world`.
+- **Branch** to synchronize.
+- **GitLab token** — an access token scoped to the project with repository read and write
+  permission. It is stored in Obsidian SecretStorage, never in plugin data.
+- **Commit author** name and email.
 
-- Startup sync runs once after the Obsidian layout is ready, when the vault is initialized.
-- Manual **Sync with GitLab** uses the same engine as startup sync.
-- A full audit-and-sync is manual and may be slower because it scans local files.
-- If a remote commit succeeds but local materialization is interrupted, the next sync recovers
-  transactionally.
+Then set up the vault depending on its current state:
+
+### Your vault already has the files (existing repository)
+
+Use this when the repository already holds your notes and you want the current vault to start
+syncing on top of them.
+
+- Press **Adopt existing**. This keeps your local files, records the GitLab branch as the sync
+  base, and marks any local differences for the next sync.
+
+### Empty vault (pull everything from GitLab)
+
+Use this on a fresh device where the vault is empty and you want to download the repository.
+
+- Press **Initialize empty vault from GitLab**, keep Obsidian open until the import completes, then
+  reload Obsidian.
+
+After setup, syncs run automatically according to the sync modes below, and you can always press
+**Sync with GitLab** (sidebar icon or command) to sync immediately.
+
+## Sync modes
+
+All automatic sync modes are optional and configured in settings.
+
+- **Sync on startup** — runs one sync after Obsidian is ready. On mobile the app is usually
+  suspended before this runs, so prefer *Sync on app foreground* there.
+- **Sync on app foreground (mobile only)** — runs one sync when you reopen the app. The reliable
+  mobile replacement for startup sync.
+- **Sync on app background (mobile only)** — runs one sync when you leave the app. Unstable: some
+  devices suspend the app before the sync finishes.
+- **Sync after edits** — runs a sync a few seconds after you stop editing (the delay is the
+  *Edit debounce* setting).
+- **Sync on a timer** — runs a sync on a fixed interval to pull changes from other devices. Great
+  for keeping a desktop up to date.
+- **Manual** — *Sync with GitLab* runs the same engine on demand.
+
+A normal sync does not scan or hash the whole vault. If a remote commit succeeds but local
+materialization is interrupted, the next sync recovers transactionally.
+
+## Conflict strategies
+
+When a file changed on **both** the device and GitLab since the last sync, the plugin never
+overwrites either side. The **Conflict strategy** setting chooses how to resolve it:
+
+- **Remote** — keep the GitLab version at the original path; your version is saved next to it as a
+  conflict copy.
+- **Local** — keep your version at the original path (and commit it); the GitLab version is saved
+  as a conflict copy.
+- **Auto merge, fallback Remote** *(default)* — first attempt a line-based three-way merge of text
+  files; if the merge conflicts or the file is binary, fall back to *Remote*.
+- **Auto merge, fallback Local** — same auto-merge, but fall back to *Local* when it cannot merge.
+
+A deletion that clashes with a change on the other side produces a Markdown conflict marker instead
+of removing the file. Binary files are preserved byte-for-byte.
 
 ## Limitations
 

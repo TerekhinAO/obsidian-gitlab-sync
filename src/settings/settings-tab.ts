@@ -69,7 +69,7 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Project path")
-      .setDesc("Namespace and project path, for example developing1382536/obsidian-vault")
+      .setDesc("Namespace and project path in GitLab, for example developing/obsidian-world")
       .addText((text) =>
         text
           .setPlaceholder("group/project")
@@ -210,7 +210,9 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Sync on startup")
-      .setDesc("Run one sync after Obsidian layout is ready")
+      .setDesc(
+        "Run one sync after Obsidian is ready. On mobile the app is usually suspended before this runs — use \"Sync on app foreground\" there instead.",
+      )
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.syncOnStartup).onChange(async (value) => {
           this.plugin.settings.syncOnStartup = value;
@@ -219,8 +221,10 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Sync on app foreground")
-      .setDesc("Run one sync when Obsidian returns from the background")
+      .setName("Sync on app foreground (mobile only)")
+      .setDesc(
+        "Mobile only. Runs one sync when the app returns to the foreground (you reopen Obsidian). This is the reliable mobile replacement for \"Sync on startup\".",
+      )
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.syncOnForeground).onChange(async (value) => {
           this.plugin.settings.syncOnForeground = value;
@@ -229,8 +233,10 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Sync on app background")
-      .setDesc("Run one sync when Obsidian is sent to the background")
+      .setName("Sync on app background (mobile only)")
+      .setDesc(
+        "Mobile only. Runs one sync when the app is sent to the background (you leave Obsidian). Unstable — some devices suspend the app before the sync finishes.",
+      )
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.syncOnBackground).onChange(async (value) => {
           this.plugin.settings.syncOnBackground = value;
@@ -240,7 +246,7 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Sync after edits")
-      .setDesc("Run a sync a short while after you stop changing files")
+      .setDesc("Run a sync a few seconds after you stop editing (see \"Edit debounce\" below)")
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.syncAfterEdit).onChange(async (value) => {
           this.plugin.settings.syncAfterEdit = value;
@@ -265,7 +271,9 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Sync on a timer")
-      .setDesc("Run a sync periodically to pull changes made on other devices")
+      .setDesc(
+        "Run a sync periodically to pull changes made on other devices. Great for keeping a desktop up to date.",
+      )
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.syncOnInterval).onChange(async (value) => {
           this.plugin.settings.syncOnInterval = value;
@@ -292,7 +300,13 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Conflict strategy")
-      .setDesc("Choose which side stays at the original path when both sides changed the same file")
+      .setDesc(
+        "How to resolve a file changed on both sides since the last sync. " +
+          "Remote: keep the GitLab version at the original path and save yours as a conflict copy. " +
+          "Local: keep your version at the original path and save GitLab's as a conflict copy. " +
+          "Auto merge variants first attempt a line-based three-way merge of text files and only " +
+          "fall back to Remote/Local when the merge conflicts or the file is binary.",
+      )
       .addDropdown((dropdown) =>
         dropdown
           .addOption("remote", "Remote")
@@ -312,7 +326,8 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
     new Setting(containerEl).setName("Interface").setHeading();
 
     new Setting(containerEl)
-      .setName("Show ribbon icon")
+      .setName("Show sidebar icon")
+      .setDesc("Show a quick sync button in the left sidebar")
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.showRibbonIcon).onChange(async (value) => {
           this.plugin.settings.showRibbonIcon = value;
