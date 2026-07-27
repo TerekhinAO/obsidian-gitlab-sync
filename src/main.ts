@@ -11,6 +11,12 @@ import { GitLabClient } from "./gitlab/client";
 const FOREGROUND_SYNC_COOLDOWN_MS = 30_000;
 const BACKGROUND_SYNC_COOLDOWN_MS = 30_000;
 const AUTO_SYNC_COOLDOWN_MS = 30_000;
+const EDIT_SYNC_COOLDOWN_MS = 10_000;
+const INTERVAL_SYNC_COOLDOWN_MS = 10_000;
+const DEFAULT_EDIT_DEBOUNCE_SECONDS = 8;
+const DEFAULT_INTERVAL_MINUTES = 10;
+const MIN_EDIT_DEBOUNCE_SECONDS = 1;
+const MIN_INTERVAL_MINUTES = 1;
 
 export default class GitLabGitlessSyncPlugin extends Plugin {
   settings: GitLabSyncSettings;
@@ -25,6 +31,10 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
   private lastBackgroundSyncAt: number | null = null;
   private lastAutoSyncAt: number | null = null;
   private lastAutoSyncTrigger: "foreground" | "background" | null = null;
+  private lastEditSyncAt: number | null = null;
+  private lastIntervalSyncAt: number | null = null;
+  private editSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  private autoSyncIntervalHandle: ReturnType<typeof setInterval> | null = null;
 
   async onUserEnable() {
     if (!this.isConfigured()) {
@@ -59,6 +69,9 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
       if (this.settings.showRibbonIcon) {
         this.showSyncRibbonIcon();
       }
+
+      this.registerEditSyncListeners();
+      this.refreshAutoSyncInterval();
 
       const recovered = await this.syncManager.recoverIfNeeded();
       if (!recovered && this.settings.syncOnStartup && this.pluginData.state.initialized) {
@@ -101,6 +114,14 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
   }
 
   async onunload() {
+    if (this.editSyncTimer !== null) {
+      clearTimeout(this.editSyncTimer);
+      this.editSyncTimer = null;
+    }
+    if (this.autoSyncIntervalHandle !== null) {
+      clearInterval(this.autoSyncIntervalHandle);
+      this.autoSyncIntervalHandle = null;
+    }
     await this.syncManager?.stopEventsListener();
   }
 
@@ -339,8 +360,113 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     );
   }
 
+  private registerEditSyncListeners(): void {
+    const vault = this.app.vault as unknown as {
+      on?: (name: string, callback: (...args: unknown[]) => void) => unknown;
+    };
+    if (typeof vault.on !== "function") {
+      return;
+    }
+    for (const name of ["create", "modify", "delete", "rename"] as const) {
+      const ref = vault.on(name, () => this.scheduleEditSync());
+      this.registerEvent(ref as never);
+    }
+  }
+
+  private scheduleEditSync(): void {
+    if (!this.settings.syncAfterEdit) {
+      return;
+    }
+    // Ignore file events emitted by the plugin's own writes during a sync so
+    // materialization does not trigger a follow-up sync loop.
+    if (this.syncManager.isSyncing()) {
+      return;
+    }
+    if (this.editSyncTimer !== null) {
+      clearTimeout(this.editSyncTimer);
+    }
+    const seconds = Math.max(
+      MIN_EDIT_DEBOUNCE_SECONDS,
+      this.settings.syncAfterEditDebounceSeconds || DEFAULT_EDIT_DEBOUNCE_SECONDS,
+    );
+    this.editSyncTimer = setTimeout(() => {
+      this.editSyncTimer = null;
+      void this.syncOnEditIfNeeded();
+    }, seconds * 1000);
+  }
+
+  private async syncOnEditIfNeeded(): Promise<void> {
+    const reason =
+      this.autoSyncBaseSkipReason() ??
+      (!this.settings.syncAfterEdit ? "setting-disabled" : null) ??
+      (this.lastEditSyncAt !== null && Date.now() - this.lastEditSyncAt < EDIT_SYNC_COOLDOWN_MS
+        ? "cooldown"
+        : null);
+    if (reason) {
+      await this.logger.debug("Edit sync skipped", { reason });
+      return;
+    }
+
+    this.lastEditSyncAt = Date.now();
+    await this.logger.info("Edit sync started", {
+      debounceSeconds: this.settings.syncAfterEditDebounceSeconds,
+    });
+    await this.logAutoSyncResult("Edit", await this.sync("edit"));
+  }
+
+  refreshAutoSyncInterval(): void {
+    if (this.autoSyncIntervalHandle !== null) {
+      clearInterval(this.autoSyncIntervalHandle);
+      this.autoSyncIntervalHandle = null;
+    }
+    if (!this.settings.syncOnInterval) {
+      return;
+    }
+    const minutes = Math.max(
+      MIN_INTERVAL_MINUTES,
+      this.settings.syncIntervalMinutes || DEFAULT_INTERVAL_MINUTES,
+    );
+    this.autoSyncIntervalHandle = setInterval(() => {
+      void this.syncOnIntervalIfNeeded();
+    }, minutes * 60_000);
+    this.registerInterval(this.autoSyncIntervalHandle as unknown as number);
+  }
+
+  private async syncOnIntervalIfNeeded(): Promise<void> {
+    const reason =
+      this.autoSyncBaseSkipReason() ??
+      (!this.settings.syncOnInterval ? "setting-disabled" : null) ??
+      (this.lastIntervalSyncAt !== null &&
+      Date.now() - this.lastIntervalSyncAt < INTERVAL_SYNC_COOLDOWN_MS
+        ? "cooldown"
+        : null);
+    if (reason) {
+      await this.logger.debug("Interval sync skipped", { reason });
+      return;
+    }
+
+    this.lastIntervalSyncAt = Date.now();
+    await this.logger.info("Interval sync started", {
+      intervalMinutes: this.settings.syncIntervalMinutes,
+    });
+    await this.logAutoSyncResult("Interval", await this.sync("interval"));
+  }
+
+  private autoSyncBaseSkipReason(): string | null {
+    if (!this.layoutReady) {
+      return "layout-not-ready";
+    }
+    if (!this.pluginData.state.initialized) {
+      return "vault-not-initialized";
+    }
+    if (this.syncManager.isSyncing()) {
+      return "sync-already-running";
+    }
+    return null;
+  }
+
   private async logAutoSyncResult(
-    label: "Foreground" | "Background",
+    label: "Foreground" | "Background" | "Edit" | "Interval",
     result: SyncResult | void,
   ): Promise<void> {
     if (!result) {

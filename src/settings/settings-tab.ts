@@ -239,6 +239,58 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Sync after edits")
+      .setDesc("Run a sync a short while after you stop changing files")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.syncAfterEdit).onChange(async (value) => {
+          this.plugin.settings.syncAfterEdit = value;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Edit debounce (seconds)")
+      .setDesc("How long to wait after the last change before syncing")
+      .addText((text) =>
+        text
+          .setPlaceholder("8")
+          .setValue(String(this.plugin.settings.syncAfterEditDebounceSeconds))
+          .onChange(async (value) => {
+            const parsed = Number.parseInt(value, 10);
+            this.plugin.settings.syncAfterEditDebounceSeconds =
+              Number.isFinite(parsed) && parsed >= 1 ? parsed : 8;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Sync on a timer")
+      .setDesc("Run a sync periodically to pull changes made on other devices")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.syncOnInterval).onChange(async (value) => {
+          this.plugin.settings.syncOnInterval = value;
+          await this.plugin.saveSettings();
+          this.plugin.refreshAutoSyncInterval();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Timer interval (minutes)")
+      .setDesc("How often the periodic sync runs")
+      .addText((text) =>
+        text
+          .setPlaceholder("10")
+          .setValue(String(this.plugin.settings.syncIntervalMinutes))
+          .onChange(async (value) => {
+            const parsed = Number.parseInt(value, 10);
+            this.plugin.settings.syncIntervalMinutes =
+              Number.isFinite(parsed) && parsed >= 1 ? parsed : 10;
+            await this.plugin.saveSettings();
+            this.plugin.refreshAutoSyncInterval();
+          }),
+      );
+
+    new Setting(containerEl)
       .setName("Conflict strategy")
       .setDesc("Choose which side stays at the original path when both sides changed the same file")
       .addDropdown((dropdown) =>

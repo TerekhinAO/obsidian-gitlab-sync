@@ -24,6 +24,10 @@ export interface GitLabSyncSettings {
   syncOnStartup: boolean;
   syncOnForeground: boolean;
   syncOnBackground: boolean;
+  syncAfterEdit: boolean;
+  syncAfterEditDebounceSeconds: number;
+  syncOnInterval: boolean;
+  syncIntervalMinutes: number;
   showRibbonIcon: boolean;
   loggingLevel: LogLevel;
   loggingEnabled: boolean;

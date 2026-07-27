@@ -152,6 +152,73 @@ describe("plugin lifecycle", () => {
     expect(plugin.intervals).toEqual([]);
   });
 
+  it("registers a periodic interval when timer sync is enabled", async () => {
+    let layoutCallback!: () => Promise<void>;
+    const plugin = new TestPlugin(
+      fakePluginData({ settings: { syncOnInterval: true, syncIntervalMinutes: 5 } }),
+      fakeApp((callback) => {
+        layoutCallback = callback as () => Promise<void>;
+      }),
+    );
+    vi.spyOn(SyncManager.prototype, "startEventsListener").mockImplementation(() => undefined);
+    vi.spyOn(SyncManager.prototype, "recoverIfNeeded").mockResolvedValue(false);
+    vi.spyOn(SyncManager.prototype, "sync").mockResolvedValue({
+      status: "success",
+      trigger: "interval",
+      message: "ok",
+    });
+
+    await plugin.onload();
+    await layoutCallback();
+
+    expect(plugin.intervals).toHaveLength(1);
+
+    await plugin.onunload();
+    vi.restoreAllMocks();
+  });
+
+  it("runs a debounced sync after edits when edit sync is enabled", async () => {
+    vi.useFakeTimers();
+    try {
+      const listeners: Record<string, (...args: any[]) => void> = {};
+      let layoutCallback!: () => Promise<void>;
+      const app = fakeApp((callback) => {
+        layoutCallback = callback as () => Promise<void>;
+      });
+      (app.vault as any).on = (name: string, callback: (...args: any[]) => void) => {
+        listeners[name] = callback;
+        return { name };
+      };
+      const plugin = new TestPlugin(
+        fakePluginData({ settings: { syncAfterEdit: true, syncAfterEditDebounceSeconds: 5 } }),
+        app,
+      );
+      vi.spyOn(SyncManager.prototype, "startEventsListener").mockImplementation(() => undefined);
+      vi.spyOn(SyncManager.prototype, "recoverIfNeeded").mockResolvedValue(false);
+      vi.spyOn(SyncManager.prototype, "isSyncing").mockReturnValue(false);
+      const sync = vi.spyOn(SyncManager.prototype, "sync").mockResolvedValue({
+        status: "success",
+        trigger: "edit",
+        message: "ok",
+      });
+
+      await plugin.onload();
+      await layoutCallback();
+      sync.mockClear();
+
+      listeners["modify"]?.({ path: "note.md" });
+      expect(sync).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(sync).toHaveBeenCalledWith("edit");
+
+      await plugin.onunload();
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
   it("logs app lifecycle events for mobile foreground diagnostics", async () => {
     let log = "";
     const documentTarget = new EventTarget() as Document;

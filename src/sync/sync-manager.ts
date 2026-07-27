@@ -28,7 +28,14 @@ export interface SyncResult {
   attempts?: number;
 }
 
-export type SyncTrigger = "startup" | "manual" | "audit" | "foreground" | "background";
+export type SyncTrigger =
+  | "startup"
+  | "manual"
+  | "audit"
+  | "foreground"
+  | "background"
+  | "edit"
+  | "interval";
 
 export interface ConflictFile {
   filePath: string;
