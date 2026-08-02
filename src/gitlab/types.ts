@@ -6,6 +6,11 @@ export interface GitLabTreeItem {
   mode: string;
 }
 
+export interface GitLabProject {
+  empty_repo: boolean;
+  default_branch: string | null;
+}
+
 export interface GitLabBranch {
   name: string;
   can_push: boolean;
