@@ -680,6 +680,16 @@ export class SyncManager {
     }
   }
 
+  async listSyncableLocalFiles(): Promise<string[]> {
+    if (!this.options.vault) {
+      return [];
+    }
+    const ignoreMatcher = this.createIgnoreMatcher();
+    await ignoreMatcher.reload();
+    const localFiles = await this.listLocalFiles("", ignoreMatcher);
+    return localFiles.filter((path) => !ignoreMatcher.isIgnored(path, {})).sort();
+  }
+
   private async auditLocalChanges(): Promise<void> {
     if (!this.options.vault) {
       return;

@@ -253,6 +253,25 @@ describe("SyncManager", () => {
     });
     expect(state.dirtyEntries[".git/config"]).toBeUndefined();
   });
+
+  it("lists syncable local files excluding hard-excluded and ignored paths", async () => {
+    const fixture = managerFixture({
+      data: initializedData(),
+      localFiles: {
+        "note.md": "note",
+        "Welcome.md": "welcome",
+        ".obsidian/plugins/gitlab-gitless-sync/main.js": "runtime",
+        "secret.md": "secret",
+      },
+    });
+    fixture.ignoreMatcher.isIgnored.mockImplementation(
+      (...args: unknown[]) => args[0] === "secret.md",
+    );
+
+    const files = await fixture.manager.listSyncableLocalFiles();
+
+    expect(files).toEqual(["Welcome.md", "note.md"]);
+  });
 });
 
 function managerFixture(options: {
