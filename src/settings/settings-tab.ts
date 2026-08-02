@@ -2,6 +2,7 @@ import { App, Modal, Notice, PluginSettingTab, Setting, TextComponent } from "ob
 import GitLabGitlessSyncPlugin from "../main";
 import type { LocalSyncState } from "../settings/settings";
 import { copyToClipboard } from "../utils";
+import { ConnectConfirmModal } from "../views/connect-confirm-modal";
 
 function secretStorage(app: App): {
   getSecret?: (key: string) => Promise<string | null>;
@@ -159,24 +160,25 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
       .setDesc(setupState.description);
 
     if (setupState.showSetupActions) {
-      setupSetting
-        .addButton((button) =>
-          button.setButtonText("Initialize empty").onClick(async () => {
-            await this.plugin.initializeFromGitLab();
-            this.display();
+      setupSetting.addButton((button) =>
+        button
+          .setButtonText("Connect to GitLab")
+          .setCta()
+          .onClick(async () => {
+            const preview = await this.plugin.previewConnect();
+            if (!preview) return; // error/misconfig already surfaced by previewConnect
+            new ConnectConfirmModal(
+              this.plugin.app,
+              this.plugin.settings.projectPath,
+              this.plugin.settings.branch,
+              preview,
+              async () => {
+                await this.plugin.connect();
+                this.display();
+              },
+            ).open();
           }),
-        )
-        .addButton((button) =>
-          button.setButtonText("Adopt existing").onClick(async () => {
-            const confirmed = typeof window === "undefined" || window.confirm(
-              "This keeps current local files, records the GitLab branch as the sync base, and marks local differences for the next sync. Continue?",
-            );
-            if (confirmed) {
-              await this.plugin.adoptExistingVault();
-              this.display();
-            }
-          }),
-        );
+      );
     }
 
     if (setupState.showResetAction) {

@@ -155,6 +155,10 @@ export class MockElement {
     this.tag = tag;
   }
 
+  // Buttons record MockButtonComponents created by Setting.addButton, so tests
+  // can assert on rendered button labels and invoke their click handlers.
+  buttons: MockButtonComponent[] = [];
+
   createEl(tag: string, options?: { text?: string }): MockElement {
     const child = new MockElement(tag);
     if (options?.text !== undefined) {
@@ -173,6 +177,7 @@ export class MockElement {
     this.children = [];
     this.ownText = "";
     this.rows = [];
+    this.buttons = [];
   }
 
   get textContent(): string {
@@ -266,8 +271,26 @@ export class Setting {
     return this;
   }
 
+  addDropdown(callback: (component: any) => void): this {
+    const dropdown = {
+      addOption() {
+        return dropdown;
+      },
+      setValue() {
+        return dropdown;
+      },
+      onChange() {
+        return dropdown;
+      },
+    };
+    callback(dropdown);
+    return this;
+  }
+
   addButton(callback: (component: any) => void): this {
-    callback(new MockButtonComponent());
+    const button = new MockButtonComponent();
+    this.containerEl.buttons?.push(button);
+    callback(button);
     return this;
   }
 }
