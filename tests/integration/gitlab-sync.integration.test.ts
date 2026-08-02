@@ -274,13 +274,30 @@ async function initializedFixture(initialRemoteFiles: Record<string, string | Ui
   const journal = journalFor(store);
   const client = () => new GitLabClient(settings, server.token, { sleep: async () => undefined });
 
+  const manager = (overrides: Partial<ConstructorParameters<typeof SyncManager>[0]> = {}): SyncManager =>
+    new SyncManager({
+      vault: vault.vault as any,
+      stateStore: store,
+      settings,
+      getToken: async () => server.token,
+      createGitLabClient: client,
+      journal,
+      now: () => 123_456,
+      nowDate: () => conflictNow,
+      logger: silentLogger,
+      ...overrides,
+    });
+
+  // Seed the vault via the production connect path: merge() writes remote bytes
+  // into the vault, then adoptExistingVault() finalizes the tracked index and
+  // clean state (the same two steps plugin.connect() runs).
   await new BootstrapService({
     vault: vault.vault as any,
     client: client() as any,
     stateStore: store,
     journal,
-    now: () => 123_456,
-  }).initialize();
+  }).merge();
+  await manager().adoptExistingVault();
 
   return {
     server,
@@ -295,20 +312,7 @@ async function initializedFixture(initialRemoteFiles: Record<string, string | Ui
       await vault.remove(path);
       await journal.recordDelete(path);
     },
-    manager(overrides: Partial<ConstructorParameters<typeof SyncManager>[0]> = {}): SyncManager {
-      return new SyncManager({
-        vault: vault.vault as any,
-        stateStore: store,
-        settings,
-        getToken: async () => server.token,
-        createGitLabClient: client,
-        journal,
-        now: () => 123_456,
-        nowDate: () => conflictNow,
-        logger: silentLogger,
-        ...overrides,
-      });
-    },
+    manager,
   };
 }
 

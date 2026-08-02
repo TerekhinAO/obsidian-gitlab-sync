@@ -180,61 +180,12 @@ async function fixture(options: {
     client,
     stateStore: store.store,
     journal: journal as any,
-    now: () => 1234,
   });
 
   return { ...vault, ...store, client, journal, service };
 }
 
 describe("BootstrapService", () => {
-  it("rejects non-empty vaults before downloading or writing", async () => {
-    const setup = await fixture({
-      localFiles: {
-        ".obsidian/plugins/gitlab-gitless-sync/main.js": bytes("plugin"),
-        "notes/local.md": bytes("local"),
-      },
-    });
-
-    await expect(setup.service.initialize()).rejects.toThrow(
-      "The local vault must be empty before importing from GitLab",
-    );
-
-    expect(setup.client.downloadArchive).not.toHaveBeenCalled();
-    expect(setup.vault.adapter.writeBinary).not.toHaveBeenCalled();
-    expect(setup.read("notes/local.md")).toEqual(bytes("local"));
-  });
-
-  it("allows only the vault config directory and active plugin directory locally", async () => {
-    const archive = await zip([{ path: "project-main/note.md", content: "remote" }]);
-    const setup = await fixture({
-      localFiles: {
-        ".obsidian/app.json": bytes("{}"),
-        ".obsidian/plugins/gitlab-gitless-sync/main.js": bytes("plugin"),
-      },
-      tree: [{ id: "blob-note", name: "note.md", type: "blob", path: "note.md", mode: "100644" }],
-      archive,
-    });
-
-    await setup.service.initialize();
-
-    expect(setup.read("note.md")).toEqual(bytes("remote"));
-  });
-
-  it("rejects unrelated plugin folders non-destructively", async () => {
-    const setup = await fixture({
-      localFiles: {
-        ".obsidian/plugins/gitlab-gitless-sync/main.js": bytes("plugin"),
-        ".obsidian/plugins/other-plugin/main.js": bytes("other"),
-      },
-    });
-
-    await expect(setup.service.initialize()).rejects.toThrow(
-      "The local vault must be empty before importing from GitLab",
-    );
-    expect(setup.read(".obsidian/plugins/other-plugin/main.js")).toEqual(bytes("other"));
-    expect(setup.vault.adapter.writeBinary).not.toHaveBeenCalled();
-  });
-
   it("strips exactly one generated archive root and skips the active plugin directory", async () => {
     const archive = await zip([
       { path: "generated-root/folder/note.md", content: "hello" },
@@ -257,14 +208,11 @@ describe("BootstrapService", () => {
       archive,
     });
 
-    const result = await setup.service.initialize();
+    await setup.service.merge();
 
     expect(setup.read("folder/note.md")).toEqual(bytes("hello"));
     expect(setup.read(".obsidian/plugins/gitlab-gitless-sync/main.js")).toEqual(bytes("local plugin"));
     expect(setup.read("generated-root/folder/note.md")).toBeUndefined();
-    expect(result.trackedFiles).toEqual({
-      "folder/note.md": { blobId: "blob-note", mode: "100644", size: 0 },
-    });
   });
 
   it.each([
@@ -277,7 +225,7 @@ describe("BootstrapService", () => {
       archive: await zip([{ path, content: "bad" }]),
     });
 
-    await expect(setup.service.initialize()).rejects.toThrow("Unsafe GitLab archive entry");
+    await expect(setup.service.merge()).rejects.toThrow("Unsafe GitLab archive entry");
 
     expect(setup.vault.adapter.writeBinary).not.toHaveBeenCalled();
     const data = await setup.store.load();
@@ -296,7 +244,7 @@ describe("BootstrapService", () => {
       ]),
     });
 
-    await expect(setup.service.initialize()).rejects.toThrow("Unsafe GitLab archive entry");
+    await expect(setup.service.merge()).rejects.toThrow("Unsafe GitLab archive entry");
   });
 
   it("preserves binary bytes and Unicode paths during extraction", async () => {
@@ -312,46 +260,10 @@ describe("BootstrapService", () => {
       archive,
     });
 
-    await setup.service.initialize();
+    await setup.service.merge();
 
     expect(setup.read("Привет/emoji-🙂.md")).toEqual(bytes("Здравствуйте"));
     expect(setup.read("images/pixel.png")).toEqual(bytes([0, 255, 137, 80, 78, 71]));
-  });
-
-  it("builds the tracked index from GitLab blobs and finalizes clean state after extraction", async () => {
-    const archive = await zip([{ path: "root/note.md", content: "remote" }]);
-    const journal = fakeJournal();
-    const setup = await fixture({
-      archive,
-      journal,
-      tree: [
-        { id: "tree", name: "docs", type: "tree", path: "docs", mode: "040000" },
-        { id: "ignore", name: ".gitignore", type: "blob", path: ".gitignore", mode: "100644" },
-        { id: "note", name: "note.md", type: "blob", path: "note.md", mode: "100644" },
-      ],
-    });
-
-    const result = await setup.service.initialize();
-
-    expect(setup.client.getTree).toHaveBeenCalledWith("commit-sha");
-    expect(journal.suppress).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({
-      commitSha: "commit-sha",
-      trackedFiles: {
-        ".gitignore": { blobId: "ignore", mode: "100644", size: 0 },
-        "note.md": { blobId: "note", mode: "100644", size: 0 },
-      },
-    });
-    const data = await setup.store.load();
-    expect(data.state).toMatchObject({
-      initialized: true,
-      lastSyncedCommitSha: "commit-sha",
-      trackedFiles: result.trackedFiles,
-      dirtyEntries: {},
-      pendingTransaction: null,
-      lastSyncAt: 1234,
-      lastSyncResult: "success",
-    });
   });
 
   describe("BootstrapService.preview", () => {
@@ -446,11 +358,10 @@ describe("BootstrapService", () => {
       branch: { name: "main", can_push: true, commit: { id: "", parent_ids: [] } },
     });
 
-    await expect(setup.service.initialize()).rejects.toThrow(
+    await expect(setup.service.merge()).rejects.toThrow(
       "The GitLab branch has no commit to import. Create an initial commit in GitLab, then try again.",
     );
 
-    expect(setup.client.getTree).not.toHaveBeenCalled();
     expect(setup.client.downloadArchive).not.toHaveBeenCalled();
   });
 });

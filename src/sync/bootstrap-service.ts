@@ -43,54 +43,13 @@ export interface BootstrapServiceOptions {
   stateStore: Pick<StateStore, "load" | "update">;
   journal?: BootstrapJournal;
   pluginId?: string;
-  now?: () => number;
 }
 
 export class BootstrapService {
   private readonly pluginId: string;
-  private readonly now: () => number;
 
   constructor(private options: BootstrapServiceOptions) {
     this.pluginId = options.pluginId ?? "gitlab-gitless-sync";
-    this.now = options.now ?? Date.now;
-  }
-
-  async initialize(): Promise<{
-    commitSha: string;
-    trackedFiles: Record<string, TrackedFile>;
-  }> {
-    await this.assertVaultEmptyForBootstrap();
-
-    const branch = await this.options.client.getBranch();
-    const commitSha = this.commitSha(branch);
-    const trackedFiles = treeToTrackedFiles(
-      await this.options.client.getTree(commitSha),
-      (path) => this.isHardExcluded(path),
-    );
-    const archive = await this.options.client.downloadArchive(commitSha);
-    const operations = await this.readArchive(archive);
-
-    await this.suppressJournal(async () => {
-      for (const operation of operations) {
-        if (operation.directory) {
-          await this.ensureFolder(operation.path);
-        } else {
-          await this.writeFile(operation.path, operation.data);
-        }
-      }
-    });
-
-    await this.options.stateStore.update((data) => {
-      data.state.initialized = true;
-      data.state.lastSyncedCommitSha = commitSha;
-      data.state.trackedFiles = cloneTrackedFiles(trackedFiles);
-      data.state.dirtyEntries = {};
-      data.state.pendingTransaction = null;
-      data.state.lastSyncAt = this.now();
-      data.state.lastSyncResult = "success";
-    });
-
-    return { commitSha, trackedFiles };
   }
 
   async merge(): Promise<ConnectMergeResult> {
@@ -193,43 +152,6 @@ export class BootstrapService {
       throw new Error(EMPTY_REMOTE_ERROR);
     }
     return commitSha;
-  }
-
-  private async assertVaultEmptyForBootstrap(): Promise<void> {
-    const configDir = normalizePath(this.options.vault.configDir);
-    const root = await this.options.vault.adapter.list("");
-
-    if (root.files.length > 0 || root.folders.some((folder) => normalizePath(folder) !== configDir)) {
-      throw new Error("The local vault must be empty before importing from GitLab");
-    }
-
-    if (!root.folders.some((folder) => normalizePath(folder) === configDir)) {
-      return;
-    }
-
-    await this.assertConfigDirAllowed(configDir);
-  }
-
-  private async assertConfigDirAllowed(configDir: string): Promise<void> {
-    const pluginsDir = `${configDir}/plugins`;
-    const pluginDir = `${pluginsDir}/${this.pluginId}`;
-    const config = await this.options.vault.adapter.list(configDir);
-
-    if (config.folders.some((folder) => normalizePath(folder) !== pluginsDir)) {
-      throw new Error("The local vault must be empty before importing from GitLab");
-    }
-
-    if (!config.folders.some((folder) => normalizePath(folder) === pluginsDir)) {
-      return;
-    }
-
-    const plugins = await this.options.vault.adapter.list(pluginsDir);
-    if (
-      plugins.files.length > 0 ||
-      plugins.folders.some((folder) => normalizePath(folder) !== pluginDir)
-    ) {
-      throw new Error("The local vault must be empty before importing from GitLab");
-    }
   }
 
   private async readArchive(archive: ArrayBuffer): Promise<Array<ArchiveOperation>> {
@@ -395,14 +317,6 @@ function treeToTrackedFiles(
           size: 0,
         },
       ]),
-  );
-}
-
-function cloneTrackedFiles(
-  trackedFiles: Record<string, TrackedFile>,
-): Record<string, TrackedFile> {
-  return Object.fromEntries(
-    Object.entries(trackedFiles).map(([path, file]) => [path, { ...file }]),
   );
 }
 

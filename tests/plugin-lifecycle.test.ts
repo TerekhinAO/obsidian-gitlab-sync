@@ -448,25 +448,6 @@ describe("plugin lifecycle", () => {
     vi.unstubAllGlobals();
   });
 
-  it("surfaces initialize-from-GitLab failures instead of throwing", async () => {
-    const app = fakeApp(() => undefined);
-    (app as any).secretStorage = {
-      getSecret: async () => "test-token",
-    };
-    const plugin = new TestPlugin(fakePluginData(), app);
-    await plugin.onload();
-
-    plugin.logger.error = vi.fn(async () => undefined) as any;
-    vi.spyOn(BootstrapService.prototype, "initialize").mockRejectedValue(
-      new Error("boom"),
-    );
-
-    await expect(plugin.initializeFromGitLab()).resolves.toBeUndefined();
-    expect(plugin.logger.error).toHaveBeenCalled();
-
-    vi.restoreAllMocks();
-  });
-
   it("merges from GitLab before adopting the existing vault when connecting", async () => {
     const app = fakeApp(() => undefined);
     (app as any).secretStorage = {

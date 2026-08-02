@@ -136,45 +136,6 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     return result;
   }
 
-  async initializeFromGitLab(): Promise<void> {
-    if (!this.isConfigured()) {
-      new Notice("Sync plugin not configured");
-      return;
-    }
-    const token = await this.readToken();
-    if (!token) {
-      new Notice("GitLab token is missing");
-      return;
-    }
-    try {
-      const service = new BootstrapService({
-        vault: this.app.vault,
-        client: new GitLabClient(this.settings, token),
-        stateStore: this.stateStore,
-        journal: {
-          suppress: async (operation) => operation(),
-        },
-      });
-      await service.initialize();
-      this.pluginData = await this.stateStore.load();
-      new Notice("Vault initialized from GitLab");
-    } catch (error) {
-      await this.logger.error("Initialize from GitLab failed", { error: String(error) });
-      new Notice(
-        `Initialize failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  }
-
-  async adoptExistingVault(): Promise<void> {
-    if (!this.isConfigured()) {
-      new Notice("Sync plugin not configured");
-      return;
-    }
-    await this.syncManager.adoptExistingVault();
-    this.pluginData = await this.stateStore.load();
-  }
-
   private async makeBootstrapService(): Promise<BootstrapService | null> {
     if (!this.isConfigured()) {
       new Notice("Sync plugin not configured");
