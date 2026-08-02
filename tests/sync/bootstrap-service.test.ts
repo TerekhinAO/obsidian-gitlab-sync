@@ -411,6 +411,23 @@ describe("BootstrapService", () => {
       expect(setup.read("note (local conflict).md")).toEqual(bytes("local"));
     });
 
+    it("suffixes the conflict copy when the copy path already exists", async () => {
+      const archive = await zip([{ path: "root/note.md", content: "remote" }]);
+      const setup = await fixture({
+        localFiles: {
+          "note.md": bytes("local"),
+          "note (local conflict).md": bytes("older conflict"),
+        },
+        tree: [{ id: "n", name: "note.md", type: "blob", path: "note.md", mode: "100644" }],
+        archive,
+      });
+      const result = await setup.service.merge();
+      expect(setup.read("note.md")).toEqual(bytes("remote"));
+      expect(setup.read("note (local conflict).md")).toEqual(bytes("older conflict")); // untouched
+      expect(result.conflictCopyPaths).toEqual(["note (local conflict) 2.md"]);
+      expect(setup.read("note (local conflict) 2.md")).toEqual(bytes("local"));
+    });
+
     it("leaves local-only files untouched", async () => {
       const archive = await zip([{ path: "root/note.md", content: "remote" }]);
       const setup = await fixture({

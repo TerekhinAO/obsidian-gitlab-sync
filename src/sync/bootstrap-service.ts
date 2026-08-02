@@ -132,16 +132,12 @@ export class BootstrapService {
     if (!(await this.options.vault.adapter.exists(base))) {
       return base;
     }
-    const slash = base.lastIndexOf("/");
-    const dot = base.lastIndexOf(".");
-    const hasExt = dot > slash;
-    const stem = hasExt ? base.slice(0, dot) : base;
-    const ext = hasExt ? base.slice(dot) : "";
+    const { dir, stem, ext } = splitName(base);
     let n = 2;
-    while (await this.options.vault.adapter.exists(`${stem} ${n}${ext}`)) {
+    while (await this.options.vault.adapter.exists(`${dir}${stem} ${n}${ext}`)) {
       n += 1;
     }
-    return `${stem} ${n}${ext}`;
+    return `${dir}${stem} ${n}${ext}`;
   }
 
   async preview(): Promise<ConnectPreview> {
@@ -422,14 +418,21 @@ function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
   return true;
 }
 
-function conflictCopyPath(path: string): string {
+function splitName(path: string): { dir: string; stem: string; ext: string } {
   const slash = path.lastIndexOf("/");
   const dir = slash === -1 ? "" : path.slice(0, slash + 1);
   const name = slash === -1 ? path : path.slice(slash + 1);
   const dot = name.lastIndexOf(".");
-  const hasExt = dot > 0;
-  const stem = hasExt ? name.slice(0, dot) : name;
-  const ext = hasExt ? name.slice(dot) : "";
+  const hasExt = dot > 0; // leading-dot files (e.g. .gitignore) have no extension
+  return {
+    dir,
+    stem: hasExt ? name.slice(0, dot) : name,
+    ext: hasExt ? name.slice(dot) : "",
+  };
+}
+
+function conflictCopyPath(path: string): string {
+  const { dir, stem, ext } = splitName(path);
   return `${dir}${stem} (local conflict)${ext}`;
 }
 

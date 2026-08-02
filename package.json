@@ -1,7 +1,7 @@
 {
   "name": "gitlab-gitless-sync",
   "version": "1.0.11",
-  "description": "Sync an Obsidian vault with a GitLab repository without requiring Git.",
+  "description": "Sync a vault with a GitLab repository without requiring Git.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
