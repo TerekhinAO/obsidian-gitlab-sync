@@ -174,7 +174,7 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
               this.plugin.settings.branch,
               preview,
               async () => {
-                await this.plugin.connect();
+                await this.plugin.connect(preview);
                 this.display();
               },
             ).open();
