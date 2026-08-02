@@ -510,6 +510,44 @@ describe("plugin lifecycle", () => {
     vi.restoreAllMocks();
   });
 
+  it("returns the preview summary when previewing a connection", async () => {
+    const app = fakeApp(() => undefined);
+    (app as any).secretStorage = {
+      getSecret: async () => "test-token",
+    };
+    const plugin = new TestPlugin(fakePluginData(), app);
+    await plugin.onload();
+
+    const summary = {
+      remoteFileCount: 3,
+      localPushCount: 1,
+      localPushPaths: ["Welcome.md"],
+      conflictCount: 0,
+    };
+    vi.spyOn(BootstrapService.prototype, "preview").mockResolvedValue(summary);
+
+    await expect(plugin.previewConnect()).resolves.toEqual(summary);
+
+    vi.restoreAllMocks();
+  });
+
+  it("surfaces preview failures as null instead of throwing", async () => {
+    const app = fakeApp(() => undefined);
+    (app as any).secretStorage = {
+      getSecret: async () => "test-token",
+    };
+    const plugin = new TestPlugin(fakePluginData(), app);
+    await plugin.onload();
+
+    plugin.logger.error = vi.fn(async () => undefined) as any;
+    vi.spyOn(BootstrapService.prototype, "preview").mockRejectedValue(new Error("boom"));
+
+    await expect(plugin.previewConnect()).resolves.toBeNull();
+    expect(plugin.logger.error).toHaveBeenCalled();
+
+    vi.restoreAllMocks();
+  });
+
   it("status modal never displays the token secret value", () => {
     const modal = new SyncStatusModal(
       {
