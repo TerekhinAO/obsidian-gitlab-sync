@@ -8,6 +8,7 @@ function makeApp() {
 describe("ConnectConfirmModal", () => {
   it("summarizes counts and caps the name list at 10", () => {
     const preview = {
+      mode: "merge" as const,
       remoteFileCount: 128,
       localPushCount: 12,
       conflictCount: 0,
@@ -22,7 +23,7 @@ describe("ConnectConfirmModal", () => {
   });
 
   it("renders the zero-push line", () => {
-    const preview = { remoteFileCount: 5, localPushCount: 0, conflictCount: 0, localPushPaths: [] };
+    const preview = { mode: "merge" as const, remoteFileCount: 5, localPushCount: 0, conflictCount: 0, localPushPaths: [] };
     const modal = new ConnectConfirmModal(makeApp(), "g/p", "main", preview, vi.fn());
     modal.onOpen();
     expect(modal.contentEl.textContent ?? "").toContain("0 files to push");
@@ -30,10 +31,23 @@ describe("ConnectConfirmModal", () => {
 
   it("invokes the callback when Connect is clicked", () => {
     const onConfirm = vi.fn();
-    const preview = { remoteFileCount: 1, localPushCount: 0, conflictCount: 0, localPushPaths: [] };
+    const preview = { mode: "merge" as const, remoteFileCount: 1, localPushCount: 0, conflictCount: 0, localPushPaths: [] };
     const modal = new ConnectConfirmModal(makeApp(), "g/p", "main", preview, onConfirm);
     modal.onOpen();
     modal.confirm();
     expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the seed variant for an empty repository", () => {
+    const preview = { mode: "seed" as const, branch: "main", localPushCount: 42,
+      localPushPaths: Array.from({ length: 42 }, (_, i) => `n-${i}.md`) };
+    const modal = new ConnectConfirmModal(makeApp(), "g/p", "main", preview, vi.fn());
+    modal.onOpen();
+    const text = modal.contentEl.textContent ?? "";
+    expect(text).toContain("repository is empty");
+    expect(text).toContain("42 files will be pushed");
+    expect(text).toContain('first commit on branch "main"');
+    expect(text).toContain("and 32 more");
+    expect(text).not.toContain("will be downloaded");
   });
 });

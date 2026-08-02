@@ -259,6 +259,8 @@ describe("BootstrapService", () => {
         ],
       });
       const preview = await setup.service.preview();
+      expect(preview.mode).toBe("merge");
+      if (preview.mode !== "merge") throw new Error("expected merge preview");
       expect(preview.remoteFileCount).toBe(2);
       expect(preview.conflictCount).toBe(1);
       expect(preview.localPushPaths).toEqual(["Welcome.md"]);

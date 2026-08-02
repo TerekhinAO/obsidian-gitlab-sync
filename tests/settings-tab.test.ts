@@ -93,6 +93,7 @@ describe("settings tab render", () => {
   it("opens the confirm modal and connects when preview is non-null", async () => {
     const plugin = fakePlugin();
     plugin.previewConnect = vi.fn(async (): Promise<ConnectPreview | null> => ({
+      mode: "merge",
       remoteFileCount: 2,
       localPushCount: 0,
       localPushPaths: [],

@@ -530,6 +530,7 @@ describe("plugin lifecycle", () => {
     await plugin.onload();
 
     const summary = {
+      mode: "merge" as const,
       remoteFileCount: 3,
       localPushCount: 1,
       localPushPaths: ["Welcome.md"],

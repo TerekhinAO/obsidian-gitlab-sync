@@ -19,13 +19,23 @@ interface BootstrapVault {
   };
 }
 
-export interface ConnectPreview {
+export interface ConnectMergePreview {
+  mode: "merge";
   remoteFileCount: number;
   // Includes both local-only files and conflicting files (files that differ from remote).
   localPushCount: number;
   localPushPaths: string[];
   conflictCount: number;
 }
+
+export interface ConnectSeedPreview {
+  mode: "seed";
+  branch: string;
+  localPushCount: number;
+  localPushPaths: string[];
+}
+
+export type ConnectPreview = ConnectMergePreview | ConnectSeedPreview;
 
 export interface ConnectMergeResult {
   commitSha: string;
@@ -122,6 +132,7 @@ export class BootstrapService {
 
     localPushPaths.sort();
     return {
+      mode: "merge",
       remoteFileCount: Object.keys(remoteIndex).length,
       localPushCount: localPushPaths.length + conflictCount,
       localPushPaths,
