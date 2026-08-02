@@ -687,6 +687,7 @@ export class SyncManager {
     const ignoreMatcher = this.createIgnoreMatcher();
     await ignoreMatcher.reload();
     const localFiles = await this.listLocalFiles("", ignoreMatcher);
+    // Empty tracked-files map: this lists what a fresh sync would push, so no file is yet tracked.
     return localFiles.filter((path) => !ignoreMatcher.isIgnored(path, {})).sort();
   }
 
