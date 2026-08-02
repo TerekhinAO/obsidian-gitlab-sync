@@ -491,6 +491,36 @@ describe("plugin lifecycle", () => {
     vi.restoreAllMocks();
   });
 
+  it("surfaces connect failures when adopting the vault reports an error", async () => {
+    const app = fakeApp(() => undefined);
+    (app as any).secretStorage = {
+      getSecret: async () => "test-token",
+    };
+    const plugin = new TestPlugin(fakePluginData(), app);
+    await plugin.onload();
+
+    plugin.logger.error = vi.fn(async () => undefined) as any;
+    const notices: string[] = [];
+    (globalThis as any).__noticeSpy = (message: string) => notices.push(message);
+
+    vi
+      .spyOn(BootstrapService.prototype, "merge")
+      .mockResolvedValue({ commitSha: "sha", conflictCopyPaths: [] });
+    vi
+      .spyOn(SyncManager.prototype, "adoptExistingVault")
+      .mockResolvedValue({ status: "error", message: "boom" } as any);
+
+    await plugin.connect();
+
+    delete (globalThis as any).__noticeSpy;
+
+    expect(plugin.logger.error).toHaveBeenCalled();
+    expect(notices).not.toContain("Connected to GitLab");
+    expect(notices.some((message) => message.includes("Connect failed"))).toBe(true);
+
+    vi.restoreAllMocks();
+  });
+
   it("returns the preview summary when previewing a connection", async () => {
     const app = fakeApp(() => undefined);
     (app as any).secretStorage = {

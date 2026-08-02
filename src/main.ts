@@ -172,8 +172,16 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     if (!service) return;
     try {
       await service.merge();
-      await this.syncManager.adoptExistingVault();
+      const result = await this.syncManager.adoptExistingVault();
       this.pluginData = await this.stateStore.load();
+      if (result.status !== "success") {
+        await this.logger.error("Connect adoption failed", {
+          status: result.status,
+          message: result.message,
+        });
+        new Notice(`Connect failed: ${result.message}`);
+        return;
+      }
       new Notice("Connected to GitLab");
     } catch (error) {
       await this.logger.error("Connect failed", { error: String(error) });

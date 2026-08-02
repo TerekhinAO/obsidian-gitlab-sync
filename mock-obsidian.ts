@@ -104,7 +104,12 @@ export class Vault {
 // Mock Notice
 export class Notice {
   constructor(message: string, timeout?: number) {
-    console.log(`NOTICE: ${message}`);
+    const spy = (globalThis as any).__noticeSpy;
+    if (typeof spy === "function") {
+      spy(message);
+    } else {
+      console.log(`NOTICE: ${message}`);
+    }
   }
 
   hide() {
