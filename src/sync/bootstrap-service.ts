@@ -22,6 +22,7 @@ interface BootstrapVault {
 
 export interface ConnectPreview {
   remoteFileCount: number;
+  // Includes both local-only files and conflicting files (files that differ from remote).
   localPushCount: number;
   localPushPaths: string[];
   conflictCount: number;
@@ -94,9 +95,7 @@ export class BootstrapService {
       await this.options.client.getTree(commitSha),
       (path) => this.isHardExcluded(path),
     );
-    const localPaths = (await this.listLocalFiles("")).filter(
-      (path) => !this.isHardExcluded(path),
-    );
+    const localPaths = await this.listLocalFiles("");
 
     const localPushPaths: string[] = [];
     let conflictCount = 0;
