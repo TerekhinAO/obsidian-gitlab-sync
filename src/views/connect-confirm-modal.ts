@@ -1,6 +1,5 @@
 import { Modal, Setting } from "obsidian";
-import type { ConnectPreview } from "../sync/bootstrap-service";
-import type { ConnectMergePreview, ConnectSeedPreview } from "../sync/bootstrap-service";
+import type { ConnectPreview, ConnectMergePreview, ConnectSeedPreview } from "../sync/bootstrap-service";
 
 const MAX_NAMES = 10;
 
@@ -48,15 +47,7 @@ export class ConnectConfirmModal extends Modal {
       this.contentEl.createEl("p", {
         text: `${preview.localPushCount} local files will be pushed to GitLab on the next sync, e.g.:`,
       });
-      const list = this.contentEl.createEl("ul");
-      for (const path of preview.localPushPaths.slice(0, MAX_NAMES)) {
-        list.createEl("li", { text: path });
-      }
-      const remainder =
-        preview.localPushCount - Math.min(preview.localPushPaths.length, MAX_NAMES);
-      if (remainder > 0) {
-        list.createEl("li", { text: `…and ${remainder} more` });
-      }
+      this.renderPathList(preview.localPushPaths, preview.localPushCount);
     }
     this.contentEl.createEl("p", {
       text: `${preview.conflictCount} files changed on both sides.`,
@@ -71,15 +62,19 @@ export class ConnectConfirmModal extends Modal {
     this.contentEl.createEl("p", {
       text: `${preview.localPushCount} files will be pushed to GitLab as the first commit on branch "${preview.branch}", e.g.:`,
     });
+    this.renderPathList(preview.localPushPaths, preview.localPushCount);
+    this.contentEl.createEl("p", { text: "Nothing is downloaded and nothing is deleted." });
+  }
+
+  private renderPathList(paths: string[], total: number): void {
     const list = this.contentEl.createEl("ul");
-    for (const path of preview.localPushPaths.slice(0, MAX_NAMES)) {
+    for (const path of paths.slice(0, MAX_NAMES)) {
       list.createEl("li", { text: path });
     }
-    const remainder = preview.localPushCount - Math.min(preview.localPushPaths.length, MAX_NAMES);
+    const remainder = total - Math.min(paths.length, MAX_NAMES);
     if (remainder > 0) {
       list.createEl("li", { text: `…and ${remainder} more` });
     }
-    this.contentEl.createEl("p", { text: "Nothing is downloaded and nothing is deleted." });
   }
 
   confirm(): void {
