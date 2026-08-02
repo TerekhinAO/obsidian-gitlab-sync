@@ -3,7 +3,6 @@ import { BlobReader, type Entry, Uint8ArrayWriter, ZipReader } from "@zip.js/zip
 import { calculateGitBlobId } from "./conflict-resolver";
 import type { GitLabClient } from "../gitlab/client";
 import type { GitLabBranch, GitLabTreeItem } from "../gitlab/types";
-import type { StateStore } from "./state-store";
 import type { TrackedFile } from "./types";
 
 const EMPTY_REMOTE_ERROR =
@@ -40,7 +39,6 @@ interface BootstrapJournal {
 export interface BootstrapServiceOptions {
   vault: BootstrapVault;
   client: Pick<GitLabClient, "getBranch" | "getTree" | "downloadArchive">;
-  stateStore: Pick<StateStore, "load" | "update">;
   journal?: BootstrapJournal;
   pluginId?: string;
 }

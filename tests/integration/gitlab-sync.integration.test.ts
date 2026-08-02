@@ -294,7 +294,6 @@ async function initializedFixture(initialRemoteFiles: Record<string, string | Ui
   await new BootstrapService({
     vault: vault.vault as any,
     client: client() as any,
-    stateStore: store,
     journal,
   }).merge();
   await manager().adoptExistingVault();

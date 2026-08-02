@@ -2,9 +2,7 @@ import { BlobWriter, TextReader, Uint8ArrayReader, ZipWriter } from "@zip.js/zip
 import { describe, expect, it, vi } from "vitest";
 import { BootstrapService } from "../../src/sync/bootstrap-service";
 import { calculateGitBlobId } from "../../src/sync/conflict-resolver";
-import { StateStore } from "../../src/sync/state-store";
 import type { GitLabBranch, GitLabTreeItem } from "../../src/gitlab/types";
-import type { PluginData } from "../../src/sync/types";
 
 vi.mock("obsidian", () => ({
   normalizePath: (path: string) => path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, ""),
@@ -42,21 +40,6 @@ async function zip(
   }
   const blob = await writer.close();
   return await blob.arrayBuffer();
-}
-
-function fakeStore(initialData: any = {}) {
-  let savedData: unknown = initialData;
-  return {
-    store: new StateStore({
-      loadData: async () => savedData,
-      saveData: async (data: unknown) => {
-        savedData = data;
-      },
-    }),
-    get data() {
-      return savedData as PluginData;
-    },
-  };
 }
 
 function fakeVault(initialFiles: Record<string, Uint8Array> = {}) {
@@ -172,17 +155,15 @@ async function fixture(options: {
   journal?: ReturnType<typeof fakeJournal>;
 }) {
   const vault = fakeVault(options.localFiles);
-  const store = fakeStore();
   const client = fakeClient(options);
   const journal = options.journal ?? fakeJournal();
   const service = new BootstrapService({
     vault: vault.vault as any,
     client,
-    stateStore: store.store,
     journal: journal as any,
   });
 
-  return { ...vault, ...store, client, journal, service };
+  return { ...vault, client, journal, service };
 }
 
 describe("BootstrapService", () => {
@@ -228,8 +209,6 @@ describe("BootstrapService", () => {
     await expect(setup.service.merge()).rejects.toThrow("Unsafe GitLab archive entry");
 
     expect(setup.vault.adapter.writeBinary).not.toHaveBeenCalled();
-    const data = await setup.store.load();
-    expect(data.state.initialized).toBe(false);
   });
 
   it("rejects symlink entries when detectable", async () => {

@@ -23,8 +23,9 @@ export function vaultSetupViewState(state: LocalSyncState): VaultSetupViewState 
   if (!state.initialized) {
     return {
       initialized: false,
-      title: "Choose vault setup",
-      description: "Initialize an empty vault from GitLab, or adopt the files already in this vault.",
+      title: "Connect to GitLab",
+      description:
+        "Download the GitLab repository into this vault. Existing local files are kept and pushed on the next sync; nothing is deleted.",
       showSetupActions: true,
       showResetAction: false,
     };

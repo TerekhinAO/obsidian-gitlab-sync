@@ -13,7 +13,8 @@ describe("settings setup view state", () => {
       lastSyncedCommitSha: null,
     });
 
-    expect(view.title).toBe("Choose vault setup");
+    expect(view.title).toBe("Connect to GitLab");
+    expect(view.description).toContain("nothing is deleted");
     expect(view.showSetupActions).toBe(true);
     expect(view.showResetAction).toBe(false);
   });

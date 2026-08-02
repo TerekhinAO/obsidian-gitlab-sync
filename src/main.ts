@@ -149,7 +149,6 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     return new BootstrapService({
       vault: this.app.vault,
       client: new GitLabClient(this.settings, token),
-      stateStore: this.stateStore,
       journal: { suppress: async (operation) => operation() },
     });
   }
