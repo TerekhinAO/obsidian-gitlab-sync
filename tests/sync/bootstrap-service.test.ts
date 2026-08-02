@@ -375,6 +375,55 @@ describe("BootstrapService", () => {
     });
   });
 
+  describe("BootstrapService.merge", () => {
+    it("writes remote-only files", async () => {
+      const archive = await zip([{ path: "root/note.md", content: "remote" }]);
+      const setup = await fixture({
+        tree: [{ id: "n", name: "note.md", type: "blob", path: "note.md", mode: "100644" }],
+        archive,
+      });
+      await setup.service.merge();
+      expect(setup.read("note.md")).toEqual(bytes("remote"));
+    });
+
+    it("leaves an identical local file untouched and creates no conflict copy", async () => {
+      const archive = await zip([{ path: "root/note.md", content: "same" }]);
+      const setup = await fixture({
+        localFiles: { "note.md": bytes("same") },
+        tree: [{ id: "n", name: "note.md", type: "blob", path: "note.md", mode: "100644" }],
+        archive,
+      });
+      const result = await setup.service.merge();
+      expect(setup.read("note.md")).toEqual(bytes("same"));
+      expect(result.conflictCopyPaths).toEqual([]);
+    });
+
+    it("keeps both versions when a file differs on both sides", async () => {
+      const archive = await zip([{ path: "root/note.md", content: "remote" }]);
+      const setup = await fixture({
+        localFiles: { "note.md": bytes("local") },
+        tree: [{ id: "n", name: "note.md", type: "blob", path: "note.md", mode: "100644" }],
+        archive,
+      });
+      const result = await setup.service.merge();
+      expect(setup.read("note.md")).toEqual(bytes("remote"));
+      expect(result.conflictCopyPaths).toEqual(["note (local conflict).md"]);
+      expect(setup.read("note (local conflict).md")).toEqual(bytes("local"));
+    });
+
+    it("leaves local-only files untouched", async () => {
+      const archive = await zip([{ path: "root/note.md", content: "remote" }]);
+      const setup = await fixture({
+        localFiles: { "Welcome.md": bytes("hello") },
+        tree: [{ id: "n", name: "note.md", type: "blob", path: "note.md", mode: "100644" }],
+        archive,
+      });
+      await setup.service.merge();
+      expect(setup.read("Welcome.md")).toEqual(bytes("hello"));
+      expect(setup.read("note.md")).toEqual(bytes("remote"));
+    });
+  });
+
   it("throws a clear error for empty remote branches", async () => {
     const setup = await fixture({
       branch: { name: "main", can_push: true, commit: { id: "", parent_ids: [] } },

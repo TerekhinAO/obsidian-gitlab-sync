@@ -28,6 +28,11 @@ export interface ConnectPreview {
   conflictCount: number;
 }
 
+export interface ConnectMergeResult {
+  commitSha: string;
+  conflictCopyPaths: string[];
+}
+
 interface BootstrapJournal {
   suppress<T>(operation: () => Promise<T>): Promise<T>;
 }
@@ -86,6 +91,57 @@ export class BootstrapService {
     });
 
     return { commitSha, trackedFiles };
+  }
+
+  async merge(): Promise<ConnectMergeResult> {
+    const branch = await this.options.client.getBranch();
+    const commitSha = this.commitSha(branch);
+    const archive = await this.options.client.downloadArchive(commitSha);
+    const operations = await this.readArchive(archive);
+    const conflictCopyPaths: string[] = [];
+
+    await this.suppressJournal(async () => {
+      for (const operation of operations) {
+        if (operation.directory) {
+          await this.ensureFolder(operation.path);
+          continue;
+        }
+        if (!(await this.options.vault.adapter.exists(operation.path))) {
+          await this.writeFile(operation.path, operation.data);
+          continue;
+        }
+        const local = new Uint8Array(
+          await this.options.vault.adapter.readBinary(operation.path),
+        );
+        if (sameBytes(local, operation.data)) {
+          continue; // identical, adopt as-is
+        }
+        // differ: remote wins at the path, local preserved as a conflict copy
+        const copyPath = await this.availableConflictCopyPath(operation.path);
+        await this.writeFile(copyPath, local);
+        await this.writeFile(operation.path, operation.data);
+        conflictCopyPaths.push(copyPath);
+      }
+    });
+
+    return { commitSha, conflictCopyPaths };
+  }
+
+  private async availableConflictCopyPath(path: string): Promise<string> {
+    const base = conflictCopyPath(path);
+    if (!(await this.options.vault.adapter.exists(base))) {
+      return base;
+    }
+    const slash = base.lastIndexOf("/");
+    const dot = base.lastIndexOf(".");
+    const hasExt = dot > slash;
+    const stem = hasExt ? base.slice(0, dot) : base;
+    const ext = hasExt ? base.slice(dot) : "";
+    let n = 2;
+    while (await this.options.vault.adapter.exists(`${stem} ${n}${ext}`)) {
+      n += 1;
+    }
+    return `${stem} ${n}${ext}`;
   }
 
   async preview(): Promise<ConnectPreview> {
@@ -356,6 +412,25 @@ function cloneTrackedFiles(
 
 function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  for (let i = 0; i < left.byteLength; i += 1) {
+    if (left[i] !== right[i]) return false;
+  }
+  return true;
+}
+
+function conflictCopyPath(path: string): string {
+  const slash = path.lastIndexOf("/");
+  const dir = slash === -1 ? "" : path.slice(0, slash + 1);
+  const name = slash === -1 ? path : path.slice(slash + 1);
+  const dot = name.lastIndexOf(".");
+  const hasExt = dot > 0;
+  const stem = hasExt ? name.slice(0, dot) : name;
+  const ext = hasExt ? name.slice(dot) : "";
+  return `${dir}${stem} (local conflict)${ext}`;
 }
 
 function isMetadataPath(path: string): boolean {
