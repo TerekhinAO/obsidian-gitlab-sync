@@ -264,14 +264,21 @@ export class SyncManager {
       await this.logGitLabTarget("Initialize empty remote target", settings);
       const token = await this.readToken(settings);
       const client = this.createClient(settings, token);
+      // Deliberately no client.validateAccess?.() here: on a truly empty remote there is no
+      // branch yet, so validateAccess (which calls getBranch) would spuriously fail. createCommit
+      // below is intentionally the first remote call and surfaces auth errors via the try/catch.
 
       const paths = await this.listSyncableLocalFiles();
       if (paths.length === 0) {
         throw new Error("The vault has no files to push.");
       }
+      if (!this.options.vault) {
+        throw new Error("Vault is required to initialize the repository.");
+      }
+      const vault = this.options.vault;
       const actions: GitLabCommitAction[] = [];
       for (const path of paths) {
-        const bytes = new Uint8Array(await this.options.vault!.adapter.readBinary(path));
+        const bytes = new Uint8Array(await vault.adapter.readBinary(path));
         actions.push({
           action: "create",
           file_path: path,
@@ -279,6 +286,9 @@ export class SyncManager {
           encoding: "base64",
         });
       }
+      // Non-atomic commit→finalize window: if createCommit succeeds but finalizeAdoption throws,
+      // state.initialized stays false while the remote commit exists. This is recoverable: a
+      // re-run/adopt re-fetches the remote as source of truth.
       const commit = await client.createCommit({ message: "Initialize vault", actions });
       const { dirtyPaths } = await this.finalizeAdoption(client);
       this.options.notice?.("Repository initialized from vault");
