@@ -5,7 +5,7 @@ import Logger from "./logger";
 import { StateStore } from "./sync/state-store";
 import SyncManager, { type SyncResult, type SyncTrigger } from "./sync/sync-manager";
 import { SyncStatusModal } from "./views/sync-status-modal";
-import { BootstrapService } from "./sync/bootstrap-service";
+import { BootstrapService, type ConnectPreview } from "./sync/bootstrap-service";
 import { GitLabClient } from "./gitlab/client";
 
 const FOREGROUND_SYNC_COOLDOWN_MS = 30_000;
@@ -173,6 +173,54 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     }
     await this.syncManager.adoptExistingVault();
     this.pluginData = await this.stateStore.load();
+  }
+
+  private async makeBootstrapService(): Promise<BootstrapService | null> {
+    if (!this.isConfigured()) {
+      new Notice("Sync plugin not configured");
+      return null;
+    }
+    const token = await this.readToken();
+    if (!token) {
+      new Notice("GitLab token is missing");
+      return null;
+    }
+    return new BootstrapService({
+      vault: this.app.vault,
+      client: new GitLabClient(this.settings, token),
+      stateStore: this.stateStore,
+      journal: { suppress: async (operation) => operation() },
+    });
+  }
+
+  async previewConnect(): Promise<ConnectPreview | null> {
+    const service = await this.makeBootstrapService();
+    if (!service) return null;
+    try {
+      return await service.preview();
+    } catch (error) {
+      await this.logger.error("Connect preview failed", { error: String(error) });
+      new Notice(
+        `Could not read GitLab: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  async connect(): Promise<void> {
+    const service = await this.makeBootstrapService();
+    if (!service) return;
+    try {
+      await service.merge();
+      await this.syncManager.adoptExistingVault();
+      this.pluginData = await this.stateStore.load();
+      new Notice("Connected to GitLab");
+    } catch (error) {
+      await this.logger.error("Connect failed", { error: String(error) });
+      new Notice(
+        `Connect failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   showSyncRibbonIcon() {

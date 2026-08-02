@@ -467,6 +467,49 @@ describe("plugin lifecycle", () => {
     vi.restoreAllMocks();
   });
 
+  it("merges from GitLab before adopting the existing vault when connecting", async () => {
+    const app = fakeApp(() => undefined);
+    (app as any).secretStorage = {
+      getSecret: async () => "test-token",
+    };
+    const plugin = new TestPlugin(fakePluginData(), app);
+    await plugin.onload();
+
+    const merge = vi
+      .spyOn(BootstrapService.prototype, "merge")
+      .mockResolvedValue({ commitSha: "sha", conflictCopyPaths: [] });
+    const adopt = vi
+      .spyOn(SyncManager.prototype, "adoptExistingVault")
+      .mockResolvedValue({ status: "success", message: "ok" } as any);
+
+    await plugin.connect();
+
+    expect(merge).toHaveBeenCalledTimes(1);
+    expect(adopt).toHaveBeenCalledTimes(1);
+    expect(merge.mock.invocationCallOrder[0]).toBeLessThan(
+      adopt.mock.invocationCallOrder[0],
+    );
+
+    vi.restoreAllMocks();
+  });
+
+  it("surfaces connect failures instead of throwing", async () => {
+    const app = fakeApp(() => undefined);
+    (app as any).secretStorage = {
+      getSecret: async () => "test-token",
+    };
+    const plugin = new TestPlugin(fakePluginData(), app);
+    await plugin.onload();
+
+    plugin.logger.error = vi.fn(async () => undefined) as any;
+    vi.spyOn(BootstrapService.prototype, "merge").mockRejectedValue(new Error("boom"));
+
+    await expect(plugin.connect()).resolves.toBeUndefined();
+    expect(plugin.logger.error).toHaveBeenCalled();
+
+    vi.restoreAllMocks();
+  });
+
   it("status modal never displays the token secret value", () => {
     const modal = new SyncStatusModal(
       {
