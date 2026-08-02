@@ -272,10 +272,73 @@ describe("SyncManager", () => {
 
     expect(files).toEqual(["Welcome.md", "note.md"]);
   });
+
+  it("seeds an empty remote from local files and finalizes adoption", async () => {
+    const fixture = managerFixture({
+      data: pluginData({ initialized: false }),
+      branchHeads: ["seed-sha"],
+      remoteTree: [
+        { id: await gitBlobId("alpha"), name: "alpha.md", type: "blob", path: "alpha.md", mode: "100644" },
+        { id: await gitBlobId("beta"), name: "beta.md", type: "blob", path: "beta.md", mode: "100644" },
+      ],
+      localFiles: {
+        "beta.md": "beta",
+        "alpha.md": "alpha",
+      },
+    });
+    fixture.gitlab.createCommit.mockResolvedValueOnce(commit("seed-sha", []));
+
+    const result = await fixture.manager.initializeEmptyRemote();
+
+    expect(result).toMatchObject({
+      status: "success",
+      commitSha: "seed-sha",
+    });
+    expect(fixture.gitlab.createCommit).toHaveBeenCalledTimes(1);
+    expect(fixture.gitlab.createCommit).toHaveBeenCalledWith({
+      message: "Initialize vault",
+      actions: [
+        { action: "create", file_path: "alpha.md", content: base64("alpha"), encoding: "base64" },
+        { action: "create", file_path: "beta.md", content: base64("beta"), encoding: "base64" },
+      ],
+    });
+
+    const state = (await fixture.store.load()).state;
+    expect(state.initialized).toBe(true);
+    expect(state.lastSyncedCommitSha).toBe("seed-sha");
+  });
+
+  it("refuses to seed an empty remote without a commit author", async () => {
+    const fixture = managerFixture({
+      data: pluginData({ initialized: false }),
+      settings: { ...settings, authorName: "", authorEmail: "" },
+      localFiles: { "alpha.md": "alpha" },
+    });
+
+    const result = await fixture.manager.initializeEmptyRemote();
+
+    expect(result.status).toBe("error");
+    expect(result.message).toMatch(/author/i);
+    expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
+  });
+
+  it("refuses to seed an empty remote when the vault has no files", async () => {
+    const fixture = managerFixture({
+      data: pluginData({ initialized: false }),
+      localFiles: {},
+    });
+
+    const result = await fixture.manager.initializeEmptyRemote();
+
+    expect(result.status).toBe("error");
+    expect(result.message).toMatch(/no files/i);
+    expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
+  });
 });
 
 function managerFixture(options: {
   data: PluginData;
+  settings?: GitLabSyncSettings;
   token?: string;
   branchHeads?: string[];
   canPush?: boolean;
@@ -283,8 +346,11 @@ function managerFixture(options: {
   remoteTree?: any[];
   localFiles?: Record<string, string>;
 }) {
+  const data = options.settings
+    ? { ...options.data, settings: options.settings }
+    : options.data;
   const events: string[] = [];
-  const store = fakeStore(options.data, events);
+  const store = fakeStore(data, events);
   const journal = {
     list: vi.fn(() => Object.values(options.data.state.dirtyEntries)),
     recordUpsert: vi.fn(async (path: string) => {
