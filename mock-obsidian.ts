@@ -199,6 +199,18 @@ export class MockButtonComponent {
     this.clickHandler = handler;
     return this;
   }
+
+  setIcon(): this {
+    return this;
+  }
+
+  setWarning(): this {
+    return this;
+  }
+
+  setTooltip(): this {
+    return this;
+  }
 }
 
 export class Modal {
