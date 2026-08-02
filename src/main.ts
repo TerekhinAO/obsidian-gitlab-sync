@@ -146,17 +146,24 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
       new Notice("GitLab token is missing");
       return;
     }
-    const service = new BootstrapService({
-      vault: this.app.vault,
-      client: new GitLabClient(this.settings, token),
-      stateStore: this.stateStore,
-      journal: {
-        suppress: async (operation) => operation(),
-      },
-    });
-    await service.initialize();
-    this.pluginData = await this.stateStore.load();
-    new Notice("Vault initialized from GitLab");
+    try {
+      const service = new BootstrapService({
+        vault: this.app.vault,
+        client: new GitLabClient(this.settings, token),
+        stateStore: this.stateStore,
+        journal: {
+          suppress: async (operation) => operation(),
+        },
+      });
+      await service.initialize();
+      this.pluginData = await this.stateStore.load();
+      new Notice("Vault initialized from GitLab");
+    } catch (error) {
+      this.logger.error("Initialize from GitLab failed", { error: String(error) });
+      new Notice(
+        `Initialize failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   async adoptExistingVault(): Promise<void> {

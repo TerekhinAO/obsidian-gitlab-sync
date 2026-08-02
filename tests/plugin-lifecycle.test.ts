@@ -3,6 +3,7 @@ import GitLabGitlessSyncPlugin from "../src/main";
 import { DEFAULT_SETTINGS, DEFAULT_STATE } from "../src/settings/settings";
 import { SyncStatusModal } from "../src/views/sync-status-modal";
 import SyncManager from "../src/sync/sync-manager";
+import { BootstrapService } from "../src/sync/bootstrap-service";
 
 function fakePluginData(overrides: any = {}) {
   return {
@@ -445,6 +446,25 @@ describe("plugin lifecycle", () => {
     expect(sync).toHaveBeenCalledTimes(1);
 
     vi.unstubAllGlobals();
+  });
+
+  it("surfaces initialize-from-GitLab failures instead of throwing", async () => {
+    const app = fakeApp(() => undefined);
+    (app as any).secretStorage = {
+      getSecret: async () => "test-token",
+    };
+    const plugin = new TestPlugin(fakePluginData(), app);
+    await plugin.onload();
+
+    plugin.logger.error = vi.fn(async () => undefined) as any;
+    vi.spyOn(BootstrapService.prototype, "initialize").mockRejectedValue(
+      new Error("boom"),
+    );
+
+    await expect(plugin.initializeFromGitLab()).resolves.toBeUndefined();
+    expect(plugin.logger.error).toHaveBeenCalled();
+
+    vi.restoreAllMocks();
   });
 
   it("status modal never displays the token secret value", () => {
