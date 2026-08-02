@@ -1,5 +1,6 @@
 import { normalizePath } from "obsidian";
 import { BlobReader, type Entry, Uint8ArrayWriter, ZipReader } from "@zip.js/zip.js";
+import { calculateGitBlobId } from "./conflict-resolver";
 import type { GitLabClient } from "../gitlab/client";
 import type { GitLabBranch, GitLabTreeItem } from "../gitlab/types";
 import type { StateStore } from "./state-store";
@@ -15,7 +16,15 @@ interface BootstrapVault {
     exists(path: string): Promise<boolean>;
     mkdir(path: string): Promise<void>;
     writeBinary(path: string, data: ArrayBuffer): Promise<void>;
+    readBinary(path: string): Promise<ArrayBuffer>;
   };
+}
+
+export interface ConnectPreview {
+  remoteFileCount: number;
+  localPushCount: number;
+  localPushPaths: string[];
+  conflictCount: number;
 }
 
 interface BootstrapJournal {
@@ -76,6 +85,55 @@ export class BootstrapService {
     });
 
     return { commitSha, trackedFiles };
+  }
+
+  async preview(): Promise<ConnectPreview> {
+    const branch = await this.options.client.getBranch();
+    const commitSha = this.commitSha(branch);
+    const remoteIndex = treeToTrackedFiles(
+      await this.options.client.getTree(commitSha),
+      (path) => this.isHardExcluded(path),
+    );
+    const localPaths = (await this.listLocalFiles("")).filter(
+      (path) => !this.isHardExcluded(path),
+    );
+
+    const localPushPaths: string[] = [];
+    let conflictCount = 0;
+    for (const path of localPaths) {
+      const remote = remoteIndex[path];
+      if (!remote) {
+        localPushPaths.push(path);
+        continue;
+      }
+      const bytes = new Uint8Array(await this.options.vault.adapter.readBinary(path));
+      if ((await calculateGitBlobId(bytes)) !== remote.blobId) {
+        conflictCount += 1;
+      }
+    }
+
+    localPushPaths.sort();
+    return {
+      remoteFileCount: Object.keys(remoteIndex).length,
+      localPushCount: localPushPaths.length + conflictCount,
+      localPushPaths,
+      conflictCount,
+    };
+  }
+
+  private async listLocalFiles(dir: string): Promise<string[]> {
+    const { files, folders } = await this.options.vault.adapter.list(dir);
+    const out: string[] = [];
+    for (const file of files) {
+      const normalized = normalizePath(file);
+      if (!this.isHardExcluded(normalized)) out.push(normalized);
+    }
+    for (const folder of folders) {
+      const normalized = normalizePath(folder);
+      if (this.isHardExcluded(normalized)) continue;
+      out.push(...(await this.listLocalFiles(normalized)));
+    }
+    return out;
   }
 
   private commitSha(branch: GitLabBranch): string {

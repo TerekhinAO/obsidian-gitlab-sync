@@ -1,6 +1,7 @@
 import { BlobWriter, TextReader, Uint8ArrayReader, ZipWriter } from "@zip.js/zip.js";
 import { describe, expect, it, vi } from "vitest";
 import { BootstrapService } from "../../src/sync/bootstrap-service";
+import { calculateGitBlobId } from "../../src/sync/conflict-resolver";
 import { StateStore } from "../../src/sync/state-store";
 import type { GitLabBranch, GitLabTreeItem } from "../../src/gitlab/types";
 import type { PluginData } from "../../src/sync/types";
@@ -108,6 +109,11 @@ function fakeVault(initialFiles: Record<string, Uint8Array> = {}) {
     mkdir: vi.fn(async (path: string) => {
       calls.push(["mkdir", path]);
       folders.add(path);
+    }),
+    readBinary: vi.fn(async (path: string) => {
+      const data = files.get(path);
+      if (!data) throw new Error(`missing ${path}`);
+      return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
     }),
     writeBinary: vi.fn(async (path: string, data: ArrayBuffer) => {
       calls.push(["writeBinary", path]);
@@ -345,6 +351,27 @@ describe("BootstrapService", () => {
       pendingTransaction: null,
       lastSyncAt: 1234,
       lastSyncResult: "success",
+    });
+  });
+
+  describe("BootstrapService.preview", () => {
+    it("counts remote files, local-only pushes, and both-side conflicts", async () => {
+      const noteId = await calculateGitBlobId(bytes("remote"));
+      const setup = await fixture({
+        localFiles: {
+          "Welcome.md": bytes("hello"),          // local-only -> push
+          "shared.md": bytes("local version"),   // in tree, differs -> conflict
+        },
+        tree: [
+          { id: noteId, name: "note.md", type: "blob", path: "note.md", mode: "100644" },
+          { id: "shared-remote", name: "shared.md", type: "blob", path: "shared.md", mode: "100644" },
+        ],
+      });
+      const preview = await setup.service.preview();
+      expect(preview.remoteFileCount).toBe(2);
+      expect(preview.conflictCount).toBe(1);
+      expect(preview.localPushPaths).toEqual(["Welcome.md"]);
+      expect(preview.localPushCount).toBe(2);
     });
   });
 
