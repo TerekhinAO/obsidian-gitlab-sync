@@ -1,6 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS, DEFAULT_STATE } from "../src/settings/settings";
 import GitLabSyncSettingsTab, { vaultSetupViewState } from "../src/settings/settings-tab";
+import { ConnectConfirmModal } from "../src/views/connect-confirm-modal";
+import type { ConnectPreview } from "../src/sync/bootstrap-service";
 import { MockElement } from "../mock-obsidian";
 
 describe("settings setup view state", () => {
@@ -46,7 +48,7 @@ function fakePlugin() {
       settings: { ...DEFAULT_SETTINGS, projectPath: "group/project", branch: "main" },
       state: { ...DEFAULT_STATE, initialized: false, lastSyncedCommitSha: null },
     },
-    previewConnect: vi.fn(async () => null),
+    previewConnect: vi.fn(async (): Promise<ConnectPreview | null> => null),
     connect: vi.fn(async () => undefined),
     saveSettings: vi.fn(async () => undefined),
   };
@@ -61,6 +63,10 @@ function renderTab(plugin: ReturnType<typeof fakePlugin>) {
 }
 
 describe("settings tab render", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("renders a single Connect to GitLab button when setup is available", () => {
     const container = renderTab(fakePlugin());
     const labels = container.buttons.map((button) => button.buttonText);
@@ -81,5 +87,36 @@ describe("settings tab render", () => {
     await connectButton!.clickHandler!();
 
     expect(plugin.previewConnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the confirm modal and connects when preview is non-null", async () => {
+    const plugin = fakePlugin();
+    plugin.previewConnect = vi.fn(async (): Promise<ConnectPreview | null> => ({
+      remoteFileCount: 2,
+      localPushCount: 0,
+      localPushPaths: [],
+      conflictCount: 0,
+    }));
+
+    // ConnectConfirmModal.confirm() runs close() + onConfirm(); by having the
+    // spied open() call confirm(), the real onConfirm wires through to connect().
+    const openSpy = vi
+      .spyOn(ConnectConfirmModal.prototype, "open")
+      .mockImplementation(function (this: ConnectConfirmModal) {
+        (this as unknown as { confirm(): void }).confirm();
+      });
+
+    const container = renderTab(plugin);
+    const connectButton = container.buttons.find(
+      (button) => button.buttonText === "Connect to GitLab",
+    );
+
+    expect(connectButton).toBeDefined();
+    await connectButton!.clickHandler!();
+
+    expect(plugin.previewConnect).toHaveBeenCalledTimes(1);
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(openSpy.mock.instances[0]).toBeInstanceOf(ConnectConfirmModal);
+    expect(plugin.connect).toHaveBeenCalledTimes(1);
   });
 });
