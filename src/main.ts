@@ -177,7 +177,7 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
       } catch (error) {
         if (error instanceof GitLabNotFoundError) {
           const branches = await ctx.client.listBranches();
-          const fallback = project.default_branch
+          const defaultBranchHint = project.default_branch
             ? `Default: ${project.default_branch}. `
             : "";
           await this.logger.error("Connect branch not found", {
@@ -185,7 +185,7 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
             branches,
           });
           new Notice(
-            `Branch "${this.settings.branch}" not found. ${fallback}Available: ${branches.join(", ")}`,
+            `Branch "${this.settings.branch}" not found. ${defaultBranchHint}Available: ${branches.join(", ")}`,
           );
           return null;
         }
@@ -232,7 +232,7 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
 
   private async connectMerge(
     service: BootstrapService,
-  ): Promise<{ status: string; message: string }> {
+  ): Promise<Awaited<ReturnType<SyncManager["adoptExistingVault"]>>> {
     await service.merge();
     return await this.syncManager.adoptExistingVault();
   }

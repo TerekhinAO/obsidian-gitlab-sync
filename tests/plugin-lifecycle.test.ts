@@ -632,6 +632,38 @@ describe("plugin lifecycle", () => {
     vi.restoreAllMocks();
   });
 
+  it("surfaces connect failures when seeding the empty remote reports an error", async () => {
+    const app = fakeApp(() => undefined);
+    (app as any).secretStorage = {
+      getSecret: async () => "test-token",
+    };
+    const plugin = new TestPlugin(fakePluginData(), app);
+    await plugin.onload();
+
+    plugin.logger.error = vi.fn(async () => undefined) as any;
+    const notices: string[] = [];
+    (globalThis as any).__noticeSpy = (message: string) => notices.push(message);
+
+    vi
+      .spyOn(plugin.syncManager, "initializeEmptyRemote")
+      .mockResolvedValue({ status: "error", message: "boom" } as any);
+
+    await plugin.connect({
+      mode: "seed",
+      branch: "main",
+      localPushCount: 1,
+      localPushPaths: ["a.md"],
+    });
+
+    delete (globalThis as any).__noticeSpy;
+
+    expect(plugin.logger.error).toHaveBeenCalled();
+    expect(notices).not.toContain("Repository initialized from vault");
+    expect(notices.some((message) => message.includes("Connect failed"))).toBe(true);
+
+    vi.restoreAllMocks();
+  });
+
   it("previewConnect reports branch-not-found with available branches", async () => {
     const app = fakeApp(() => undefined);
     (app as any).secretStorage = {
