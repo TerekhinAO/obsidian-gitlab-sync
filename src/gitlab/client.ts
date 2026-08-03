@@ -15,6 +15,7 @@ import type {
   GitLabBranch,
   GitLabCompareResult,
   GitLabPayloadWarning,
+  GitLabProject,
   GitLabRequestDiagnostic,
   GitLabTreeItem,
 } from "./types";
@@ -92,6 +93,23 @@ export class GitLabClient {
     return await this.requestJson<GitLabBranch>(
       `/repository/branches/${encodeURIComponent(this.settings.branch)}`,
     );
+  }
+
+  async getProject(): Promise<GitLabProject> {
+    return await this.requestJson<GitLabProject>("");
+  }
+
+  async listBranches(): Promise<string[]> {
+    const names: string[] = [];
+    let page = "1";
+    while (page) {
+      const response = await this.requestJsonResponse<Array<{ name: string }>>(
+        `/repository/branches?per_page=100&page=${page}`,
+      );
+      names.push(...response.json.map((branch) => branch.name));
+      page = this.header(response.headers, "X-Next-Page") ?? "";
+    }
+    return names;
   }
 
   async getTree(ref: string): Promise<GitLabTreeItem[]> {

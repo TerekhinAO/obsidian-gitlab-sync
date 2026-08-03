@@ -131,6 +131,27 @@ describe("GitLabClient", () => {
     );
   });
 
+  it("fetches the project and reports empty_repo", async () => {
+    fake.queue({ status: 200, json: { empty_repo: true, default_branch: null } });
+    const project = await new GitLabClient(settings, "glpat-test").getProject();
+    expect(fake.calls[0].url).toBe(
+      "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault",
+    );
+    expect(project.empty_repo).toBe(true);
+    expect(project.default_branch).toBeNull();
+  });
+
+  it("lists branch names across pages", async () => {
+    fake.queue({ status: 200, json: [{ name: "main" }, { name: "dev" }], headers: { "X-Next-Page": "2" } });
+    fake.queue({ status: 200, json: [{ name: "release" }], headers: { "X-Next-Page": "" } });
+    const names = await new GitLabClient(settings, "glpat-test").listBranches();
+    expect(names).toEqual(["main", "dev", "release"]);
+    expect(fake.calls[0].url).toBe(
+      "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/branches?per_page=100&page=1",
+    );
+    expect(fake.calls[1].url).toContain("page=2");
+  });
+
   it("returns typed branch, compare, raw file, blob, archive, and commit responses", async () => {
     fake.queue({
       status: 200,

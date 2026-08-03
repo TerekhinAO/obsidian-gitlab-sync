@@ -104,7 +104,12 @@ export class Vault {
 // Mock Notice
 export class Notice {
   constructor(message: string, timeout?: number) {
-    console.log(`NOTICE: ${message}`);
+    const spy = (globalThis as any).__noticeSpy;
+    if (typeof spy === "function") {
+      spy(message);
+    } else {
+      console.log(`NOTICE: ${message}`);
+    }
   }
 
   hide() {
@@ -140,14 +145,87 @@ export class Plugin {
   registerEvent(_eventRef: EventRef): void {}
 }
 
+// Minimal general-purpose HTMLElement stub for view/modal tests.
+// Supports createEl(tag, { text }) returning a child element (which itself
+// supports createEl), empty(), setText(), and a recursive textContent
+// accumulated from its own text plus all descendants.
+export class MockElement {
+  tag: string;
+  ownText = "";
+  children: MockElement[] = [];
+  // Rows are used by Setting to record name/desc entries (see SyncStatusModal).
+  rows: Array<{ name?: string; desc?: string }> = [];
+
+  constructor(tag = "div") {
+    this.tag = tag;
+  }
+
+  // Buttons record MockButtonComponents created by Setting.addButton, so tests
+  // can assert on rendered button labels and invoke their click handlers.
+  buttons: MockButtonComponent[] = [];
+
+  createEl(tag: string, options?: { text?: string }): MockElement {
+    const child = new MockElement(tag);
+    if (options?.text !== undefined) {
+      child.ownText = options.text;
+    }
+    this.children.push(child);
+    return child;
+  }
+
+  setText(text: string): void {
+    this.ownText = text;
+    this.children = [];
+  }
+
+  empty(): void {
+    this.children = [];
+    this.ownText = "";
+    this.rows = [];
+    this.buttons = [];
+  }
+
+  get textContent(): string {
+    return this.ownText + this.children.map((child) => child.textContent).join("");
+  }
+}
+
+export class MockButtonComponent {
+  buttonText = "";
+  cta = false;
+  clickHandler: (() => void) | null = null;
+
+  setButtonText(text: string): this {
+    this.buttonText = text;
+    return this;
+  }
+
+  setCta(): this {
+    this.cta = true;
+    return this;
+  }
+
+  onClick(handler: () => void): this {
+    this.clickHandler = handler;
+    return this;
+  }
+
+  setIcon(): this {
+    return this;
+  }
+
+  setWarning(): this {
+    return this;
+  }
+
+  setTooltip(): this {
+    return this;
+  }
+}
+
 export class Modal {
   titleEl = { setText: (_text: string) => undefined };
-  contentEl: any = {
-    rows: [] as Array<{ name?: string; desc?: string }>,
-    empty() {
-      this.rows = [];
-    },
-  };
+  contentEl: any = new MockElement("div");
 
   constructor(public app: any) {}
 
@@ -198,7 +276,26 @@ export class Setting {
     return this;
   }
 
-  addButton(_callback: (component: any) => void): this {
+  addDropdown(callback: (component: any) => void): this {
+    const dropdown = {
+      addOption() {
+        return dropdown;
+      },
+      setValue() {
+        return dropdown;
+      },
+      onChange() {
+        return dropdown;
+      },
+    };
+    callback(dropdown);
+    return this;
+  }
+
+  addButton(callback: (component: any) => void): this {
+    const button = new MockButtonComponent();
+    this.containerEl.buttons?.push(button);
+    callback(button);
     return this;
   }
 }

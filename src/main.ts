@@ -5,8 +5,9 @@ import Logger from "./logger";
 import { StateStore } from "./sync/state-store";
 import SyncManager, { type SyncResult, type SyncTrigger } from "./sync/sync-manager";
 import { SyncStatusModal } from "./views/sync-status-modal";
-import { BootstrapService } from "./sync/bootstrap-service";
+import { BootstrapService, type ConnectPreview } from "./sync/bootstrap-service";
 import { GitLabClient } from "./gitlab/client";
+import { GitLabNotFoundError } from "./gitlab/errors";
 
 const FOREGROUND_SYNC_COOLDOWN_MS = 30_000;
 const BACKGROUND_SYNC_COOLDOWN_MS = 30_000;
@@ -136,36 +137,104 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     return result;
   }
 
-  async initializeFromGitLab(): Promise<void> {
+  private async makeConnectContext(): Promise<
+    { client: GitLabClient; service: BootstrapService } | null
+  > {
     if (!this.isConfigured()) {
       new Notice("Sync plugin not configured");
-      return;
+      return null;
     }
     const token = await this.readToken();
     if (!token) {
       new Notice("GitLab token is missing");
-      return;
+      return null;
     }
+    const client = new GitLabClient(this.settings, token);
     const service = new BootstrapService({
       vault: this.app.vault,
-      client: new GitLabClient(this.settings, token),
-      stateStore: this.stateStore,
-      journal: {
-        suppress: async (operation) => operation(),
-      },
+      client,
+      journal: { suppress: async (operation) => operation() },
     });
-    await service.initialize();
-    this.pluginData = await this.stateStore.load();
-    new Notice("Vault initialized from GitLab");
+    return { client, service };
   }
 
-  async adoptExistingVault(): Promise<void> {
-    if (!this.isConfigured()) {
-      new Notice("Sync plugin not configured");
-      return;
+  async previewConnect(): Promise<ConnectPreview | null> {
+    const ctx = await this.makeConnectContext();
+    if (!ctx) return null;
+    try {
+      const project = await ctx.client.getProject();
+      if (project.empty_repo) {
+        const paths = await this.syncManager.listSyncableLocalFiles();
+        return {
+          mode: "seed",
+          branch: this.settings.branch,
+          localPushCount: paths.length,
+          localPushPaths: paths,
+        };
+      }
+      try {
+        return await ctx.service.preview();
+      } catch (error) {
+        if (error instanceof GitLabNotFoundError) {
+          const branches = await ctx.client.listBranches();
+          const defaultBranchHint = project.default_branch
+            ? `Default: ${project.default_branch}. `
+            : "";
+          await this.logger.error("Connect branch not found", {
+            branch: this.settings.branch,
+            branches,
+          });
+          new Notice(
+            `Branch "${this.settings.branch}" not found. ${defaultBranchHint}Available: ${branches.join(", ")}`,
+          );
+          return null;
+        }
+        throw error;
+      }
+    } catch (error) {
+      await this.logger.error("Connect preview failed", { error: String(error) });
+      new Notice(
+        `Could not read GitLab: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
     }
-    await this.syncManager.adoptExistingVault();
-    this.pluginData = await this.stateStore.load();
+  }
+
+  async connect(preview: ConnectPreview): Promise<void> {
+    const ctx = await this.makeConnectContext();
+    if (!ctx) return;
+    try {
+      const result =
+        preview.mode === "seed"
+          ? await this.syncManager.initializeEmptyRemote()
+          : await this.connectMerge(ctx.service);
+      this.pluginData = await this.stateStore.load();
+      if (result.status !== "success") {
+        await this.logger.error("Connect failed", {
+          status: result.status,
+          message: result.message,
+        });
+        new Notice(`Connect failed: ${result.message}`);
+        return;
+      }
+      new Notice(
+        preview.mode === "seed"
+          ? "Repository initialized from vault"
+          : "Connected to GitLab",
+      );
+    } catch (error) {
+      await this.logger.error("Connect failed", { error: String(error) });
+      new Notice(
+        `Connect failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  private async connectMerge(
+    service: BootstrapService,
+  ): Promise<Awaited<ReturnType<SyncManager["adoptExistingVault"]>>> {
+    await service.merge();
+    return await this.syncManager.adoptExistingVault();
   }
 
   showSyncRibbonIcon() {

@@ -669,7 +669,7 @@ function lcsTable(left: string[], right: string[]): number[][] {
   return table;
 }
 
-function toBase64(bytes: Uint8Array): string {
+export function toBase64(bytes: Uint8Array): string {
   if (typeof btoa === "function") {
     let binary = "";
     for (const byte of bytes) {

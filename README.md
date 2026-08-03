@@ -40,6 +40,40 @@ the same file changed locally and on GitLab, but normal synchronization still ap
 non-conflicting remote changes. If a file was deleted in GitLab and did not change locally, the
 local copy is deleted too.
 
+## Recommended `.gitignore` for a new vault
+
+The plugin automatically excludes only its own runtime folder
+(`.obsidian/plugins/gitlab-gitless-sync/`), its log, the `.git` directory, and sync-metadata
+files. **Everything else — including the rest of `.obsidian/` — is synced unless you ignore it.**
+Root and nested `.gitignore` rules are honored (for normal syncs and for the first commit when you
+initialize an empty repository from the vault).
+
+On a **new vault**, create a `.gitignore` file in the vault root before the first sync. Pick the
+scope you want:
+
+- **Recommended — keep settings in sync, drop only device-specific state.** Obsidian's
+  `workspace*.json` and caches change constantly per device and cause needless churn/conflicts:
+
+  ```gitignore
+  .obsidian/workspace.json
+  .obsidian/workspace-mobile.json
+  .obsidian/cache
+  .trash/
+  ```
+
+- **Keep Obsidian config out of the repository entirely** (settings, themes, and other plugins are
+  not shared across devices):
+
+  ```gitignore
+  .obsidian/
+  ```
+
+- **Sync everything** — omit `.gitignore` (or leave it empty). Note the per-device `workspace.json`
+  churn described above.
+
+The `.gitignore` file itself is a normal file: it is committed and shared, so the same rules apply
+on every device.
+
 ## Getting started
 
 First fill in the connection settings under **Settings → GitLab Gitless Sync**:
@@ -64,25 +98,23 @@ project, and grant only the permissions the plugin needs:
 Keep the token private. If you stop using the plugin or move the vault to another repository,
 revoke the old token in GitLab and create a new project-scoped token.
 
-Then set up the vault depending on its current state:
+Then press **Connect to GitLab**. The plugin inspects the vault and the repository and shows a
+summary before making any change — nothing is deleted, and when a file differs on both sides both
+versions are kept as conflict copies. One button handles every starting state:
 
-### Your vault already has the files (existing repository)
+- **Empty vault, repository has commits** — the repository files are downloaded into the vault.
+- **Vault already has files** — your local files are kept and merged with the repository; local-only
+  files are pushed on the next sync.
+- **Empty repository (no commits yet)** — your vault is pushed as the first commit, which also
+  creates the branch. This requires a **commit author name and email** in settings.
 
-Use this when the repository already holds your notes and you want the current vault to start
-syncing on top of them.
+If the repository is not empty but the configured **Branch** does not exist, the plugin lists the
+available branches (and the default) in a notice instead of changing anything — set **Branch** to a
+listed name and try again.
 
-- Press **Adopt existing**. This keeps your local files, records the GitLab branch as the sync
-  base, and marks any local differences for the next sync.
-
-### Empty vault (pull everything from GitLab)
-
-Use this on a fresh device where the vault is empty and you want to download the repository.
-
-- Press **Initialize empty vault from GitLab**, keep Obsidian open until the import completes, then
-  reload Obsidian.
-
-After setup, syncs run automatically according to the sync modes below, and you can always press
-**Sync with GitLab** (sidebar icon or command) to sync immediately.
+Keep Obsidian open until the summary confirms completion. After setup, syncs run automatically
+according to the sync modes below, and you can always press **Sync with GitLab** (sidebar icon or
+command) to sync immediately.
 
 ## Sync modes
 
@@ -124,7 +156,8 @@ of removing the file. Binary files are preserved byte-for-byte.
 - GitLab only, one configured project and one branch, REST API only.
 - No local Git, isomorphic-git, shell Git, merge, rebase, force push, branch switching, Git LFS,
   submodules, symlinks, executable-bit editing, or multiple remotes.
-- Initial import is only supported into an empty vault.
+- Seeding an empty repository pushes the whole vault in a single first commit (no chunking); very
+  large vaults are bounded by GitLab's request size limit.
 - Plugin runtime files and sync state are local-only.
 
 ## Security

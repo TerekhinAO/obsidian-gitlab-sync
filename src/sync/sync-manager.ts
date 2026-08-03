@@ -1,12 +1,17 @@
 import { normalizePath, type App, type Plugin, type Vault } from "obsidian";
 import { GitLabClient } from "../gitlab/client";
-import type { CreatedGitLabCommit, GitLabBranch, GitLabTreeItem } from "../gitlab/types";
+import type {
+  CreatedGitLabCommit,
+  GitLabBranch,
+  GitLabCommitAction,
+  GitLabTreeItem,
+} from "../gitlab/types";
 import type Logger from "../logger";
 import { ChangeJournal } from "./change-journal";
 import { IgnoreMatcher } from "./ignore-matcher";
 import { LocalMaterializer } from "./local-materializer";
 import { LocalSnapshotService, type VersionState } from "./local-snapshot";
-import { calculateGitBlobId } from "./conflict-resolver";
+import { calculateGitBlobId, toBase64 } from "./conflict-resolver";
 import { RemoteDiffService, type RemoteChange } from "./remote-diff";
 import { StateStore } from "./state-store";
 import { SyncPlanner, type SyncPlan } from "./sync-planner";
@@ -188,25 +193,7 @@ export class SyncManager {
       const token = await this.readToken(settings);
       const client = this.createClient(settings, token);
       await client.validateAccess?.();
-      const branch = await client.getBranch();
-      this.validateBranch(branch);
-      const trackedFiles = treeToTrackedFiles(
-        await client.getTree(branch.commit.id),
-        this.isHardExcluded.bind(this),
-      );
-
-      await this.options.stateStore.update((next) => {
-        next.state.initialized = true;
-        next.state.lastSyncedCommitSha = branch.commit.id;
-        next.state.trackedFiles = trackedFiles;
-        next.state.dirtyEntries = {};
-        next.state.pendingTransaction = null;
-        next.state.lastSyncAt = this.now();
-        next.state.lastSyncResult = "success";
-      });
-      await this.auditLocalChanges();
-      const adopted = await this.options.stateStore.load();
-      const dirtyPaths = Object.keys(adopted.state.dirtyEntries).length;
+      const { commitSha, dirtyPaths } = await this.finalizeAdoption(client);
       this.options.notice?.(
         dirtyPaths === 0
           ? "Existing vault adopted"
@@ -215,13 +202,106 @@ export class SyncManager {
       return {
         status: "success",
         message: "Existing vault adopted",
-        commitSha: branch.commit.id,
+        commitSha,
         dirtyPaths,
       };
     } catch (error) {
       const message = errorMessage(error);
       await this.options.logger?.error("Adopt existing vault failed", { message });
       this.options.notice?.(`Error adopting existing vault. ${message}`);
+      return { status: "error", message };
+    } finally {
+      progress?.hide?.();
+      this.syncing = false;
+    }
+  }
+
+  private async finalizeAdoption(
+    client: GitLabClientLike,
+  ): Promise<{ commitSha: string; dirtyPaths: number }> {
+    const branch = await client.getBranch();
+    this.validateBranch(branch);
+    const trackedFiles = treeToTrackedFiles(
+      await client.getTree(branch.commit.id),
+      this.isHardExcluded.bind(this),
+    );
+    await this.options.stateStore.update((next) => {
+      next.state.initialized = true;
+      next.state.lastSyncedCommitSha = branch.commit.id;
+      next.state.trackedFiles = trackedFiles;
+      next.state.dirtyEntries = {};
+      next.state.pendingTransaction = null;
+      next.state.lastSyncAt = this.now();
+      next.state.lastSyncResult = "success";
+    });
+    await this.auditLocalChanges();
+    const adopted = await this.options.stateStore.load();
+    return {
+      commitSha: branch.commit.id,
+      dirtyPaths: Object.keys(adopted.state.dirtyEntries).length,
+    };
+  }
+
+  async initializeEmptyRemote(): Promise<{
+    status: "success" | "error" | "already-running";
+    message: string;
+    commitSha?: string;
+    dirtyPaths?: number;
+  }> {
+    if (this.syncing) {
+      this.options.notice?.("Sync already running");
+      return { status: "already-running", message: "Sync already running" };
+    }
+
+    this.syncing = true;
+    const progress = this.options.createProgressNotice?.("Creating first commit…");
+    try {
+      const data = await this.options.stateStore.load();
+      const settings = this.validateSettings(this.options.settings ?? data.settings);
+      if (!settings.authorName.trim() || !settings.authorEmail.trim()) {
+        throw new Error("Set a commit author name and email before creating the first commit.");
+      }
+      await this.logGitLabTarget("Initialize empty remote target", settings);
+      const token = await this.readToken(settings);
+      const client = this.createClient(settings, token);
+      // Deliberately no client.validateAccess?.() here: on a truly empty remote there is no
+      // branch yet, so validateAccess (which calls getBranch) would spuriously fail. createCommit
+      // below is intentionally the first remote call and surfaces auth errors via the try/catch.
+
+      const paths = await this.listSyncableLocalFiles();
+      if (paths.length === 0) {
+        throw new Error("The vault has no files to push.");
+      }
+      if (!this.options.vault) {
+        throw new Error("Vault is required to initialize the repository.");
+      }
+      const vault = this.options.vault;
+      const actions: GitLabCommitAction[] = [];
+      for (const path of paths) {
+        const bytes = new Uint8Array(await vault.adapter.readBinary(path));
+        actions.push({
+          action: "create",
+          file_path: path,
+          content: toBase64(bytes),
+          encoding: "base64",
+        });
+      }
+      // Non-atomic commit→finalize window: if createCommit succeeds but finalizeAdoption throws,
+      // state.initialized stays false while the remote commit exists. This is recoverable: a
+      // re-run/adopt re-fetches the remote as source of truth.
+      const commit = await client.createCommit({ message: "Initialize vault", actions });
+      const { dirtyPaths } = await this.finalizeAdoption(client);
+      this.options.notice?.("Repository initialized from vault");
+      return {
+        status: "success",
+        message: "Repository initialized",
+        commitSha: commit.id,
+        dirtyPaths,
+      };
+    } catch (error) {
+      const message = errorMessage(error);
+      await this.options.logger?.error("Initialize empty remote failed", { message });
+      this.options.notice?.(`Error initializing repository. ${message}`);
       return { status: "error", message };
     } finally {
       progress?.hide?.();
@@ -678,6 +758,17 @@ export class SyncManager {
         message: errorMessage(error),
       });
     }
+  }
+
+  async listSyncableLocalFiles(): Promise<string[]> {
+    if (!this.options.vault) {
+      return [];
+    }
+    const ignoreMatcher = this.createIgnoreMatcher();
+    await ignoreMatcher.reload();
+    const localFiles = await this.listLocalFiles("", ignoreMatcher);
+    // Empty tracked-files map: this lists what a fresh sync would push, so no file is yet tracked.
+    return localFiles.filter((path) => !ignoreMatcher.isIgnored(path, {})).sort();
   }
 
   private async auditLocalChanges(): Promise<void> {

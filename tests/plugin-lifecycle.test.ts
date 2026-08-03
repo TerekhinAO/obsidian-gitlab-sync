@@ -3,6 +3,17 @@ import GitLabGitlessSyncPlugin from "../src/main";
 import { DEFAULT_SETTINGS, DEFAULT_STATE } from "../src/settings/settings";
 import { SyncStatusModal } from "../src/views/sync-status-modal";
 import SyncManager from "../src/sync/sync-manager";
+import { BootstrapService } from "../src/sync/bootstrap-service";
+import { GitLabClient } from "../src/gitlab/client";
+import { GitLabNotFoundError } from "../src/gitlab/errors";
+
+const MERGE_PREVIEW = {
+  mode: "merge" as const,
+  remoteFileCount: 0,
+  localPushCount: 0,
+  localPushPaths: [] as string[],
+  conflictCount: 0,
+};
 
 function fakePluginData(overrides: any = {}) {
   return {
@@ -445,6 +456,237 @@ describe("plugin lifecycle", () => {
     expect(sync).toHaveBeenCalledTimes(1);
 
     vi.unstubAllGlobals();
+  });
+
+  it("merges from GitLab before adopting the existing vault when connecting", async () => {
+    const app = fakeApp(() => undefined);
+    (app as any).secretStorage = {
+      getSecret: async () => "test-token",
+    };
+    const plugin = new TestPlugin(fakePluginData(), app);
+    await plugin.onload();
+
+    const merge = vi
+      .spyOn(BootstrapService.prototype, "merge")
+      .mockResolvedValue({ commitSha: "sha", conflictCopyPaths: [] });
+    const adopt = vi
+      .spyOn(SyncManager.prototype, "adoptExistingVault")
+      .mockResolvedValue({ status: "success", message: "ok" } as any);
+
+    await plugin.connect(MERGE_PREVIEW);
+
+    expect(merge).toHaveBeenCalledTimes(1);
+    expect(adopt).toHaveBeenCalledTimes(1);
+    expect(merge.mock.invocationCallOrder[0]).toBeLessThan(
+      adopt.mock.invocationCallOrder[0],
+    );
+
+    vi.restoreAllMocks();
+  });
+
+  it("surfaces connect failures instead of throwing", async () => {
+    const app = fakeApp(() => undefined);
+    (app as any).secretStorage = {
+      getSecret: async () => "test-token",
+    };
+    const plugin = new TestPlugin(fakePluginData(), app);
+    await plugin.onload();
+
+    plugin.logger.error = vi.fn(async () => undefined) as any;
+    vi.spyOn(BootstrapService.prototype, "merge").mockRejectedValue(new Error("boom"));
+
+    await expect(plugin.connect(MERGE_PREVIEW)).resolves.toBeUndefined();
+    expect(plugin.logger.error).toHaveBeenCalled();
+
+    vi.restoreAllMocks();
+  });
+
+  it("surfaces connect failures when adopting the vault reports an error", async () => {
+    const app = fakeApp(() => undefined);
+    (app as any).secretStorage = {
+      getSecret: async () => "test-token",
+    };
+    const plugin = new TestPlugin(fakePluginData(), app);
+    await plugin.onload();
+
+    plugin.logger.error = vi.fn(async () => undefined) as any;
+    const notices: string[] = [];
+    (globalThis as any).__noticeSpy = (message: string) => notices.push(message);
+
+    vi
+      .spyOn(BootstrapService.prototype, "merge")
+      .mockResolvedValue({ commitSha: "sha", conflictCopyPaths: [] });
+    vi
+      .spyOn(SyncManager.prototype, "adoptExistingVault")
+      .mockResolvedValue({ status: "error", message: "boom" } as any);
+
+    await plugin.connect(MERGE_PREVIEW);
+
+    delete (globalThis as any).__noticeSpy;
+
+    expect(plugin.logger.error).toHaveBeenCalled();
+    expect(notices).not.toContain("Connected to GitLab");
+    expect(notices.some((message) => message.includes("Connect failed"))).toBe(true);
+
+    vi.restoreAllMocks();
+  });
+
+  it("returns the preview summary when previewing a connection", async () => {
+    const app = fakeApp(() => undefined);
+    (app as any).secretStorage = {
+      getSecret: async () => "test-token",
+    };
+    const plugin = new TestPlugin(fakePluginData(), app);
+    await plugin.onload();
+
+    const summary = {
+      mode: "merge" as const,
+      remoteFileCount: 3,
+      localPushCount: 1,
+      localPushPaths: ["Welcome.md"],
+      conflictCount: 0,
+    };
+    vi.spyOn(GitLabClient.prototype, "getProject").mockResolvedValue({
+      empty_repo: false,
+      default_branch: "main",
+    } as any);
+    vi.spyOn(BootstrapService.prototype, "preview").mockResolvedValue(summary);
+
+    await expect(plugin.previewConnect()).resolves.toEqual(summary);
+
+    vi.restoreAllMocks();
+  });
+
+  it("surfaces preview failures as null instead of throwing", async () => {
+    const app = fakeApp(() => undefined);
+    (app as any).secretStorage = {
+      getSecret: async () => "test-token",
+    };
+    const plugin = new TestPlugin(fakePluginData(), app);
+    await plugin.onload();
+
+    plugin.logger.error = vi.fn(async () => undefined) as any;
+    vi.spyOn(GitLabClient.prototype, "getProject").mockResolvedValue({
+      empty_repo: false,
+      default_branch: "main",
+    } as any);
+    vi.spyOn(BootstrapService.prototype, "preview").mockRejectedValue(new Error("boom"));
+
+    await expect(plugin.previewConnect()).resolves.toBeNull();
+    expect(plugin.logger.error).toHaveBeenCalled();
+
+    vi.restoreAllMocks();
+  });
+
+  it("previewConnect returns seed mode for an empty repository", async () => {
+    const app = fakeApp(() => undefined);
+    (app as any).secretStorage = {
+      getSecret: async () => "test-token",
+    };
+    const plugin = new TestPlugin(fakePluginData(), app);
+    await plugin.onload();
+
+    vi.spyOn(GitLabClient.prototype, "getProject").mockResolvedValue({
+      empty_repo: true,
+      default_branch: null,
+    } as any);
+    vi.spyOn(plugin.syncManager, "listSyncableLocalFiles").mockResolvedValue([
+      "Welcome.md",
+      "note.md",
+    ]);
+
+    const preview = await plugin.previewConnect();
+    expect(preview).toMatchObject({
+      mode: "seed",
+      branch: "main",
+      localPushCount: 2,
+      localPushPaths: ["Welcome.md", "note.md"],
+    });
+
+    vi.restoreAllMocks();
+  });
+
+  it("connect routes seed previews to initializeEmptyRemote", async () => {
+    const app = fakeApp(() => undefined);
+    (app as any).secretStorage = {
+      getSecret: async () => "test-token",
+    };
+    const plugin = new TestPlugin(fakePluginData(), app);
+    await plugin.onload();
+
+    const seed = vi
+      .spyOn(plugin.syncManager, "initializeEmptyRemote")
+      .mockResolvedValue({ status: "success", message: "ok" } as any);
+    const merge = vi.spyOn(BootstrapService.prototype, "merge");
+
+    await plugin.connect({
+      mode: "seed",
+      branch: "main",
+      localPushCount: 1,
+      localPushPaths: ["a.md"],
+    });
+
+    expect(seed).toHaveBeenCalledTimes(1);
+    expect(merge).not.toHaveBeenCalled();
+
+    vi.restoreAllMocks();
+  });
+
+  it("surfaces connect failures when seeding the empty remote reports an error", async () => {
+    const app = fakeApp(() => undefined);
+    (app as any).secretStorage = {
+      getSecret: async () => "test-token",
+    };
+    const plugin = new TestPlugin(fakePluginData(), app);
+    await plugin.onload();
+
+    plugin.logger.error = vi.fn(async () => undefined) as any;
+    const notices: string[] = [];
+    (globalThis as any).__noticeSpy = (message: string) => notices.push(message);
+
+    vi
+      .spyOn(plugin.syncManager, "initializeEmptyRemote")
+      .mockResolvedValue({ status: "error", message: "boom" } as any);
+
+    await plugin.connect({
+      mode: "seed",
+      branch: "main",
+      localPushCount: 1,
+      localPushPaths: ["a.md"],
+    });
+
+    delete (globalThis as any).__noticeSpy;
+
+    expect(plugin.logger.error).toHaveBeenCalled();
+    expect(notices).not.toContain("Repository initialized from vault");
+    expect(notices.some((message) => message.includes("Connect failed"))).toBe(true);
+
+    vi.restoreAllMocks();
+  });
+
+  it("previewConnect reports branch-not-found with available branches", async () => {
+    const app = fakeApp(() => undefined);
+    (app as any).secretStorage = {
+      getSecret: async () => "test-token",
+    };
+    const plugin = new TestPlugin(fakePluginData(), app);
+    await plugin.onload();
+
+    vi.spyOn(GitLabClient.prototype, "getProject").mockResolvedValue({
+      empty_repo: false,
+      default_branch: "master",
+    } as any);
+    vi.spyOn(BootstrapService.prototype, "preview").mockRejectedValue(
+      new GitLabNotFoundError("404 Branch Not Found"),
+    );
+    vi.spyOn(GitLabClient.prototype, "listBranches").mockResolvedValue(["master", "dev"]);
+    const errorSpy = vi.spyOn(plugin.logger, "error");
+
+    const preview = await plugin.previewConnect();
+    expect(preview).toBeNull();
+    expect(errorSpy).toHaveBeenCalled();
+
+    vi.restoreAllMocks();
   });
 
   it("status modal never displays the token secret value", () => {

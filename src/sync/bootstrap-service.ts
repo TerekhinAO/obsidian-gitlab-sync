@@ -1,8 +1,8 @@
 import { normalizePath } from "obsidian";
 import { BlobReader, type Entry, Uint8ArrayWriter, ZipReader } from "@zip.js/zip.js";
+import { calculateGitBlobId } from "./conflict-resolver";
 import type { GitLabClient } from "../gitlab/client";
 import type { GitLabBranch, GitLabTreeItem } from "../gitlab/types";
-import type { StateStore } from "./state-store";
 import type { TrackedFile } from "./types";
 
 const EMPTY_REMOTE_ERROR =
@@ -15,7 +15,31 @@ interface BootstrapVault {
     exists(path: string): Promise<boolean>;
     mkdir(path: string): Promise<void>;
     writeBinary(path: string, data: ArrayBuffer): Promise<void>;
+    readBinary(path: string): Promise<ArrayBuffer>;
   };
+}
+
+export interface ConnectMergePreview {
+  mode: "merge";
+  remoteFileCount: number;
+  // Includes both local-only files and conflicting files (files that differ from remote).
+  localPushCount: number;
+  localPushPaths: string[];
+  conflictCount: number;
+}
+
+export interface ConnectSeedPreview {
+  mode: "seed";
+  branch: string;
+  localPushCount: number;
+  localPushPaths: string[];
+}
+
+export type ConnectPreview = ConnectMergePreview | ConnectSeedPreview;
+
+export interface ConnectMergeResult {
+  commitSha: string;
+  conflictCopyPaths: string[];
 }
 
 interface BootstrapJournal {
@@ -25,57 +49,110 @@ interface BootstrapJournal {
 export interface BootstrapServiceOptions {
   vault: BootstrapVault;
   client: Pick<GitLabClient, "getBranch" | "getTree" | "downloadArchive">;
-  stateStore: Pick<StateStore, "load" | "update">;
   journal?: BootstrapJournal;
   pluginId?: string;
-  now?: () => number;
 }
 
 export class BootstrapService {
   private readonly pluginId: string;
-  private readonly now: () => number;
 
   constructor(private options: BootstrapServiceOptions) {
     this.pluginId = options.pluginId ?? "gitlab-gitless-sync";
-    this.now = options.now ?? Date.now;
   }
 
-  async initialize(): Promise<{
-    commitSha: string;
-    trackedFiles: Record<string, TrackedFile>;
-  }> {
-    await this.assertVaultEmptyForBootstrap();
-
+  async merge(): Promise<ConnectMergeResult> {
     const branch = await this.options.client.getBranch();
     const commitSha = this.commitSha(branch);
-    const trackedFiles = treeToTrackedFiles(
-      await this.options.client.getTree(commitSha),
-      (path) => this.isHardExcluded(path),
-    );
     const archive = await this.options.client.downloadArchive(commitSha);
     const operations = await this.readArchive(archive);
+    const conflictCopyPaths: string[] = [];
 
     await this.suppressJournal(async () => {
       for (const operation of operations) {
         if (operation.directory) {
           await this.ensureFolder(operation.path);
-        } else {
-          await this.writeFile(operation.path, operation.data);
+          continue;
         }
+        if (!(await this.options.vault.adapter.exists(operation.path))) {
+          await this.writeFile(operation.path, operation.data);
+          continue;
+        }
+        const local = new Uint8Array(
+          await this.options.vault.adapter.readBinary(operation.path),
+        );
+        if (sameBytes(local, operation.data)) {
+          continue; // identical, adopt as-is
+        }
+        // differ: remote wins at the path, local preserved as a conflict copy
+        const copyPath = await this.availableConflictCopyPath(operation.path);
+        await this.writeFile(copyPath, local);
+        await this.writeFile(operation.path, operation.data);
+        conflictCopyPaths.push(copyPath);
       }
     });
 
-    await this.options.stateStore.update((data) => {
-      data.state.initialized = true;
-      data.state.lastSyncedCommitSha = commitSha;
-      data.state.trackedFiles = cloneTrackedFiles(trackedFiles);
-      data.state.dirtyEntries = {};
-      data.state.pendingTransaction = null;
-      data.state.lastSyncAt = this.now();
-      data.state.lastSyncResult = "success";
-    });
+    return { commitSha, conflictCopyPaths };
+  }
 
-    return { commitSha, trackedFiles };
+  private async availableConflictCopyPath(path: string): Promise<string> {
+    const base = conflictCopyPath(path);
+    if (!(await this.options.vault.adapter.exists(base))) {
+      return base;
+    }
+    const { dir, stem, ext } = splitName(base);
+    let n = 2;
+    while (await this.options.vault.adapter.exists(`${dir}${stem} ${n}${ext}`)) {
+      n += 1;
+    }
+    return `${dir}${stem} ${n}${ext}`;
+  }
+
+  async preview(): Promise<ConnectPreview> {
+    const branch = await this.options.client.getBranch();
+    const commitSha = this.commitSha(branch);
+    const remoteIndex = treeToTrackedFiles(
+      await this.options.client.getTree(commitSha),
+      (path) => this.isHardExcluded(path),
+    );
+    const localPaths = await this.listLocalFiles("");
+
+    const localPushPaths: string[] = [];
+    let conflictCount = 0;
+    for (const path of localPaths) {
+      const remote = remoteIndex[path];
+      if (!remote) {
+        localPushPaths.push(path);
+        continue;
+      }
+      const bytes = new Uint8Array(await this.options.vault.adapter.readBinary(path));
+      if ((await calculateGitBlobId(bytes)) !== remote.blobId) {
+        conflictCount += 1;
+      }
+    }
+
+    localPushPaths.sort();
+    return {
+      mode: "merge",
+      remoteFileCount: Object.keys(remoteIndex).length,
+      localPushCount: localPushPaths.length + conflictCount,
+      localPushPaths,
+      conflictCount,
+    };
+  }
+
+  private async listLocalFiles(dir: string): Promise<string[]> {
+    const { files, folders } = await this.options.vault.adapter.list(dir);
+    const out: string[] = [];
+    for (const file of files) {
+      const normalized = normalizePath(file);
+      if (!this.isHardExcluded(normalized)) out.push(normalized);
+    }
+    for (const folder of folders) {
+      const normalized = normalizePath(folder);
+      if (this.isHardExcluded(normalized)) continue;
+      out.push(...(await this.listLocalFiles(normalized)));
+    }
+    return out;
   }
 
   private commitSha(branch: GitLabBranch): string {
@@ -84,43 +161,6 @@ export class BootstrapService {
       throw new Error(EMPTY_REMOTE_ERROR);
     }
     return commitSha;
-  }
-
-  private async assertVaultEmptyForBootstrap(): Promise<void> {
-    const configDir = normalizePath(this.options.vault.configDir);
-    const root = await this.options.vault.adapter.list("");
-
-    if (root.files.length > 0 || root.folders.some((folder) => normalizePath(folder) !== configDir)) {
-      throw new Error("The local vault must be empty before importing from GitLab");
-    }
-
-    if (!root.folders.some((folder) => normalizePath(folder) === configDir)) {
-      return;
-    }
-
-    await this.assertConfigDirAllowed(configDir);
-  }
-
-  private async assertConfigDirAllowed(configDir: string): Promise<void> {
-    const pluginsDir = `${configDir}/plugins`;
-    const pluginDir = `${pluginsDir}/${this.pluginId}`;
-    const config = await this.options.vault.adapter.list(configDir);
-
-    if (config.folders.some((folder) => normalizePath(folder) !== pluginsDir)) {
-      throw new Error("The local vault must be empty before importing from GitLab");
-    }
-
-    if (!config.folders.some((folder) => normalizePath(folder) === pluginsDir)) {
-      return;
-    }
-
-    const plugins = await this.options.vault.adapter.list(pluginsDir);
-    if (
-      plugins.files.length > 0 ||
-      plugins.folders.some((folder) => normalizePath(folder) !== pluginDir)
-    ) {
-      throw new Error("The local vault must be empty before importing from GitLab");
-    }
   }
 
   private async readArchive(archive: ArrayBuffer): Promise<Array<ArchiveOperation>> {
@@ -289,16 +329,34 @@ function treeToTrackedFiles(
   );
 }
 
-function cloneTrackedFiles(
-  trackedFiles: Record<string, TrackedFile>,
-): Record<string, TrackedFile> {
-  return Object.fromEntries(
-    Object.entries(trackedFiles).map(([path, file]) => [path, { ...file }]),
-  );
-}
-
 function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  for (let i = 0; i < left.byteLength; i += 1) {
+    if (left[i] !== right[i]) return false;
+  }
+  return true;
+}
+
+function splitName(path: string): { dir: string; stem: string; ext: string } {
+  const slash = path.lastIndexOf("/");
+  const dir = slash === -1 ? "" : path.slice(0, slash + 1);
+  const name = slash === -1 ? path : path.slice(slash + 1);
+  const dot = name.lastIndexOf(".");
+  const hasExt = dot > 0; // leading-dot files (e.g. .gitignore) have no extension
+  return {
+    dir,
+    stem: hasExt ? name.slice(0, dot) : name,
+    ext: hasExt ? name.slice(dot) : "",
+  };
+}
+
+function conflictCopyPath(path: string): string {
+  const { dir, stem, ext } = splitName(path);
+  return `${dir}${stem} (local conflict)${ext}`;
 }
 
 function isMetadataPath(path: string): boolean {

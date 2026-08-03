@@ -1,9 +1,8 @@
 import { BlobWriter, TextReader, Uint8ArrayReader, ZipWriter } from "@zip.js/zip.js";
 import { describe, expect, it, vi } from "vitest";
 import { BootstrapService } from "../../src/sync/bootstrap-service";
-import { StateStore } from "../../src/sync/state-store";
+import { calculateGitBlobId } from "../../src/sync/conflict-resolver";
 import type { GitLabBranch, GitLabTreeItem } from "../../src/gitlab/types";
-import type { PluginData } from "../../src/sync/types";
 
 vi.mock("obsidian", () => ({
   normalizePath: (path: string) => path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, ""),
@@ -41,21 +40,6 @@ async function zip(
   }
   const blob = await writer.close();
   return await blob.arrayBuffer();
-}
-
-function fakeStore(initialData: any = {}) {
-  let savedData: unknown = initialData;
-  return {
-    store: new StateStore({
-      loadData: async () => savedData,
-      saveData: async (data: unknown) => {
-        savedData = data;
-      },
-    }),
-    get data() {
-      return savedData as PluginData;
-    },
-  };
 }
 
 function fakeVault(initialFiles: Record<string, Uint8Array> = {}) {
@@ -108,6 +92,11 @@ function fakeVault(initialFiles: Record<string, Uint8Array> = {}) {
     mkdir: vi.fn(async (path: string) => {
       calls.push(["mkdir", path]);
       folders.add(path);
+    }),
+    readBinary: vi.fn(async (path: string) => {
+      const data = files.get(path);
+      if (!data) throw new Error(`missing ${path}`);
+      return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
     }),
     writeBinary: vi.fn(async (path: string, data: ArrayBuffer) => {
       calls.push(["writeBinary", path]);
@@ -166,69 +155,18 @@ async function fixture(options: {
   journal?: ReturnType<typeof fakeJournal>;
 }) {
   const vault = fakeVault(options.localFiles);
-  const store = fakeStore();
   const client = fakeClient(options);
   const journal = options.journal ?? fakeJournal();
   const service = new BootstrapService({
     vault: vault.vault as any,
     client,
-    stateStore: store.store,
     journal: journal as any,
-    now: () => 1234,
   });
 
-  return { ...vault, ...store, client, journal, service };
+  return { ...vault, client, journal, service };
 }
 
 describe("BootstrapService", () => {
-  it("rejects non-empty vaults before downloading or writing", async () => {
-    const setup = await fixture({
-      localFiles: {
-        ".obsidian/plugins/gitlab-gitless-sync/main.js": bytes("plugin"),
-        "notes/local.md": bytes("local"),
-      },
-    });
-
-    await expect(setup.service.initialize()).rejects.toThrow(
-      "The local vault must be empty before importing from GitLab",
-    );
-
-    expect(setup.client.downloadArchive).not.toHaveBeenCalled();
-    expect(setup.vault.adapter.writeBinary).not.toHaveBeenCalled();
-    expect(setup.read("notes/local.md")).toEqual(bytes("local"));
-  });
-
-  it("allows only the vault config directory and active plugin directory locally", async () => {
-    const archive = await zip([{ path: "project-main/note.md", content: "remote" }]);
-    const setup = await fixture({
-      localFiles: {
-        ".obsidian/app.json": bytes("{}"),
-        ".obsidian/plugins/gitlab-gitless-sync/main.js": bytes("plugin"),
-      },
-      tree: [{ id: "blob-note", name: "note.md", type: "blob", path: "note.md", mode: "100644" }],
-      archive,
-    });
-
-    await setup.service.initialize();
-
-    expect(setup.read("note.md")).toEqual(bytes("remote"));
-  });
-
-  it("rejects unrelated plugin folders non-destructively", async () => {
-    const setup = await fixture({
-      localFiles: {
-        ".obsidian/plugins/gitlab-gitless-sync/main.js": bytes("plugin"),
-        ".obsidian/plugins/other-plugin/main.js": bytes("other"),
-      },
-    });
-
-    await expect(setup.service.initialize()).rejects.toThrow(
-      "The local vault must be empty before importing from GitLab",
-    );
-    expect(setup.read(".obsidian/plugins/other-plugin/main.js")).toEqual(bytes("other"));
-    expect(setup.vault.adapter.writeBinary).not.toHaveBeenCalled();
-  });
-
   it("strips exactly one generated archive root and skips the active plugin directory", async () => {
     const archive = await zip([
       { path: "generated-root/folder/note.md", content: "hello" },
@@ -251,14 +189,11 @@ describe("BootstrapService", () => {
       archive,
     });
 
-    const result = await setup.service.initialize();
+    await setup.service.merge();
 
     expect(setup.read("folder/note.md")).toEqual(bytes("hello"));
     expect(setup.read(".obsidian/plugins/gitlab-gitless-sync/main.js")).toEqual(bytes("local plugin"));
     expect(setup.read("generated-root/folder/note.md")).toBeUndefined();
-    expect(result.trackedFiles).toEqual({
-      "folder/note.md": { blobId: "blob-note", mode: "100644", size: 0 },
-    });
   });
 
   it.each([
@@ -271,11 +206,9 @@ describe("BootstrapService", () => {
       archive: await zip([{ path, content: "bad" }]),
     });
 
-    await expect(setup.service.initialize()).rejects.toThrow("Unsafe GitLab archive entry");
+    await expect(setup.service.merge()).rejects.toThrow("Unsafe GitLab archive entry");
 
     expect(setup.vault.adapter.writeBinary).not.toHaveBeenCalled();
-    const data = await setup.store.load();
-    expect(data.state.initialized).toBe(false);
   });
 
   it("rejects symlink entries when detectable", async () => {
@@ -290,7 +223,7 @@ describe("BootstrapService", () => {
       ]),
     });
 
-    await expect(setup.service.initialize()).rejects.toThrow("Unsafe GitLab archive entry");
+    await expect(setup.service.merge()).rejects.toThrow("Unsafe GitLab archive entry");
   });
 
   it("preserves binary bytes and Unicode paths during extraction", async () => {
@@ -306,45 +239,98 @@ describe("BootstrapService", () => {
       archive,
     });
 
-    await setup.service.initialize();
+    await setup.service.merge();
 
     expect(setup.read("Привет/emoji-🙂.md")).toEqual(bytes("Здравствуйте"));
     expect(setup.read("images/pixel.png")).toEqual(bytes([0, 255, 137, 80, 78, 71]));
   });
 
-  it("builds the tracked index from GitLab blobs and finalizes clean state after extraction", async () => {
-    const archive = await zip([{ path: "root/note.md", content: "remote" }]);
-    const journal = fakeJournal();
-    const setup = await fixture({
-      archive,
-      journal,
-      tree: [
-        { id: "tree", name: "docs", type: "tree", path: "docs", mode: "040000" },
-        { id: "ignore", name: ".gitignore", type: "blob", path: ".gitignore", mode: "100644" },
-        { id: "note", name: "note.md", type: "blob", path: "note.md", mode: "100644" },
-      ],
+  describe("BootstrapService.preview", () => {
+    it("counts remote files, local-only pushes, and both-side conflicts", async () => {
+      const noteId = await calculateGitBlobId(bytes("remote"));
+      const setup = await fixture({
+        localFiles: {
+          "Welcome.md": bytes("hello"),          // local-only -> push
+          "shared.md": bytes("local version"),   // in tree, differs -> conflict
+        },
+        tree: [
+          { id: noteId, name: "note.md", type: "blob", path: "note.md", mode: "100644" },
+          { id: "shared-remote", name: "shared.md", type: "blob", path: "shared.md", mode: "100644" },
+        ],
+      });
+      const preview = await setup.service.preview();
+      expect(preview.mode).toBe("merge");
+      if (preview.mode !== "merge") throw new Error("expected merge preview");
+      expect(preview.remoteFileCount).toBe(2);
+      expect(preview.conflictCount).toBe(1);
+      expect(preview.localPushPaths).toEqual(["Welcome.md"]);
+      expect(preview.localPushCount).toBe(2);
+    });
+  });
+
+  describe("BootstrapService.merge", () => {
+    it("writes remote-only files", async () => {
+      const archive = await zip([{ path: "root/note.md", content: "remote" }]);
+      const setup = await fixture({
+        tree: [{ id: "n", name: "note.md", type: "blob", path: "note.md", mode: "100644" }],
+        archive,
+      });
+      await setup.service.merge();
+      expect(setup.read("note.md")).toEqual(bytes("remote"));
     });
 
-    const result = await setup.service.initialize();
-
-    expect(setup.client.getTree).toHaveBeenCalledWith("commit-sha");
-    expect(journal.suppress).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({
-      commitSha: "commit-sha",
-      trackedFiles: {
-        ".gitignore": { blobId: "ignore", mode: "100644", size: 0 },
-        "note.md": { blobId: "note", mode: "100644", size: 0 },
-      },
+    it("leaves an identical local file untouched and creates no conflict copy", async () => {
+      const archive = await zip([{ path: "root/note.md", content: "same" }]);
+      const setup = await fixture({
+        localFiles: { "note.md": bytes("same") },
+        tree: [{ id: "n", name: "note.md", type: "blob", path: "note.md", mode: "100644" }],
+        archive,
+      });
+      const result = await setup.service.merge();
+      expect(setup.read("note.md")).toEqual(bytes("same"));
+      expect(result.conflictCopyPaths).toEqual([]);
     });
-    const data = await setup.store.load();
-    expect(data.state).toMatchObject({
-      initialized: true,
-      lastSyncedCommitSha: "commit-sha",
-      trackedFiles: result.trackedFiles,
-      dirtyEntries: {},
-      pendingTransaction: null,
-      lastSyncAt: 1234,
-      lastSyncResult: "success",
+
+    it("keeps both versions when a file differs on both sides", async () => {
+      const archive = await zip([{ path: "root/note.md", content: "remote" }]);
+      const setup = await fixture({
+        localFiles: { "note.md": bytes("local") },
+        tree: [{ id: "n", name: "note.md", type: "blob", path: "note.md", mode: "100644" }],
+        archive,
+      });
+      const result = await setup.service.merge();
+      expect(setup.read("note.md")).toEqual(bytes("remote"));
+      expect(result.conflictCopyPaths).toEqual(["note (local conflict).md"]);
+      expect(setup.read("note (local conflict).md")).toEqual(bytes("local"));
+    });
+
+    it("suffixes the conflict copy when the copy path already exists", async () => {
+      const archive = await zip([{ path: "root/note.md", content: "remote" }]);
+      const setup = await fixture({
+        localFiles: {
+          "note.md": bytes("local"),
+          "note (local conflict).md": bytes("older conflict"),
+        },
+        tree: [{ id: "n", name: "note.md", type: "blob", path: "note.md", mode: "100644" }],
+        archive,
+      });
+      const result = await setup.service.merge();
+      expect(setup.read("note.md")).toEqual(bytes("remote"));
+      expect(setup.read("note (local conflict).md")).toEqual(bytes("older conflict")); // untouched
+      expect(result.conflictCopyPaths).toEqual(["note (local conflict) 2.md"]);
+      expect(setup.read("note (local conflict) 2.md")).toEqual(bytes("local"));
+    });
+
+    it("leaves local-only files untouched", async () => {
+      const archive = await zip([{ path: "root/note.md", content: "remote" }]);
+      const setup = await fixture({
+        localFiles: { "Welcome.md": bytes("hello") },
+        tree: [{ id: "n", name: "note.md", type: "blob", path: "note.md", mode: "100644" }],
+        archive,
+      });
+      await setup.service.merge();
+      expect(setup.read("Welcome.md")).toEqual(bytes("hello"));
+      expect(setup.read("note.md")).toEqual(bytes("remote"));
     });
   });
 
@@ -353,11 +339,10 @@ describe("BootstrapService", () => {
       branch: { name: "main", can_push: true, commit: { id: "", parent_ids: [] } },
     });
 
-    await expect(setup.service.initialize()).rejects.toThrow(
+    await expect(setup.service.merge()).rejects.toThrow(
       "The GitLab branch has no commit to import. Create an initial commit in GitLab, then try again.",
     );
 
-    expect(setup.client.getTree).not.toHaveBeenCalled();
     expect(setup.client.downloadArchive).not.toHaveBeenCalled();
   });
 });
