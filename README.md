@@ -40,6 +40,40 @@ the same file changed locally and on GitLab, but normal synchronization still ap
 non-conflicting remote changes. If a file was deleted in GitLab and did not change locally, the
 local copy is deleted too.
 
+## Recommended `.gitignore` for a new vault
+
+The plugin automatically excludes only its own runtime folder
+(`.obsidian/plugins/gitlab-gitless-sync/`), its log, the `.git` directory, and sync-metadata
+files. **Everything else — including the rest of `.obsidian/` — is synced unless you ignore it.**
+Root and nested `.gitignore` rules are honored (for normal syncs and for the first commit when you
+initialize an empty repository from the vault).
+
+On a **new vault**, create a `.gitignore` file in the vault root before the first sync. Pick the
+scope you want:
+
+- **Recommended — keep settings in sync, drop only device-specific state.** Obsidian's
+  `workspace*.json` and caches change constantly per device and cause needless churn/conflicts:
+
+  ```gitignore
+  .obsidian/workspace.json
+  .obsidian/workspace-mobile.json
+  .obsidian/cache
+  .trash/
+  ```
+
+- **Keep Obsidian config out of the repository entirely** (settings, themes, and other plugins are
+  not shared across devices):
+
+  ```gitignore
+  .obsidian/
+  ```
+
+- **Sync everything** — omit `.gitignore` (or leave it empty). Note the per-device `workspace.json`
+  churn described above.
+
+The `.gitignore` file itself is a normal file: it is committed and shared, so the same rules apply
+on every device.
+
 ## Getting started
 
 First fill in the connection settings under **Settings → GitLab Gitless Sync**:
