@@ -45,25 +45,9 @@ Four steps: create the repository and a token, connect the vault, turn on automa
 1. Create a project in GitLab — either on [gitlab.com](https://gitlab.com) or on a self-managed
    instance (any HTTPS base URL works). A brand-new **empty** project is fine: the plugin can create
    the first commit from your vault. An existing project with content is fine too.
-2. Create a token for the plugin. A **project access token** is preferred — it can only reach that
-   one project:
+2. Create an access token for the plugin:
 
    **Project → Settings → Access tokens → Add new token**
-   - **Role:** `Maintainer`. GitLab protects the default branch of a new project against pushes from
-     Developers, so a Developer token gets `403 You are not allowed to push into this branch`.
-   - **Scope:** `api`.
-
-   Why `api`: the plugin creates commits through `POST /repository/commits`, and that endpoint only
-   accepts `api`. The `write_repository` scope covers Git-over-HTTP (`git push`) **only** and will
-   fail here with `403 insufficient_scope`.
-
-3. If project access tokens are disabled on your instance, use a personal access token instead —
-   **User settings → Access tokens → Add new token**, scope `api` — and make sure your account has
-   at least the Maintainer role in the project. Note that an `api` PAT reaches every project you can
-   access, so prefer a project token where possible.
-
-4. On instances with [fine-grained tokens](https://docs.gitlab.com/auth/tokens/fine_grained_access_tokens_rest/)
-   you can replace the broad `api` scope with project-limited access:
 
    - **Group and project access:** *Only specific groups or projects that I'm a member of*, then
      select the vault project.
@@ -73,6 +57,10 @@ Four steps: create the repository and a token, connect the vault, turn on automa
 
    Fine-grained permissions do not cascade — grant each one explicitly. If the target branch is
    protected, add Protected Branch Read.
+
+3. If your GitLab instance does not support fine-grained access tokens, use a project access token
+   with role `Maintainer` and scope `api`. The plugin uses GitLab's REST API to create commits;
+   `write_repository` is only for Git-over-HTTP and is not enough for this plugin.
 
 Keep the token private. If you stop using the plugin or move the vault to another repository, revoke
 the old token and create a new one.
