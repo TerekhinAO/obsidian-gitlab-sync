@@ -10,9 +10,9 @@ import type Logger from "../logger";
 import { ChangeJournal } from "./change-journal";
 import { IgnoreMatcher } from "./ignore-matcher";
 import { LocalMaterializer } from "./local-materializer";
-import { LocalSnapshotService, type VersionState } from "./local-snapshot";
+import { LocalSnapshotService, type LocalSnapshotEntry, type VersionState } from "./local-snapshot";
 import { calculateGitBlobId, toBase64 } from "./conflict-resolver";
-import { RemoteDiffService, type RemoteChange } from "./remote-diff";
+import { RemoteDiffService, type RemoteChange, type RemoteDiffClient } from "./remote-diff";
 import { StateStore } from "./state-store";
 import { SyncPlanner, type SyncPlan } from "./sync-planner";
 import type {
@@ -87,7 +87,7 @@ interface LocalSnapshotLike {
   snapshot(
     entries: DirtyEntry[],
     tracked: Record<string, TrackedFile>,
-  ): Promise<unknown[]>;
+  ): Promise<LocalSnapshotEntry[]>;
 }
 
 interface PlannerLike {
@@ -97,7 +97,7 @@ interface PlannerLike {
     trackedFiles: Record<string, TrackedFile>;
     dirtyEntries: DirtyEntry[];
     remoteChanges: RemoteChange[];
-    localSnapshots: any[];
+    localSnapshots: LocalSnapshotEntry[];
     now: Date;
   }): Promise<SyncPlan>;
 }
@@ -426,7 +426,7 @@ export class SyncManager {
         trackedFiles,
         dirtyEntries,
         remoteChanges: remote.changes,
-        localSnapshots: localSnapshots as any[],
+        localSnapshots,
         now: this.nowDate(),
       });
 
@@ -651,11 +651,10 @@ export class SyncManager {
   }
 
   private async defaultGetToken(settings: GitLabSyncSettings): Promise<string | null> {
-    const storage = (this.options.app as any)?.secretStorage;
-    if (!storage?.getSecret) {
+    if (!this.options.app) {
       return null;
     }
-    return await storage.getSecret(settings.tokenSecretName);
+    return await this.options.app.secretStorage.getSecret(settings.tokenSecretName);
   }
 
   private validateBranch(branch: GitLabBranch): void {
@@ -673,8 +672,17 @@ export class SyncManager {
   }
 
   private createRemoteDiffService(client: GitLabClientLike): RemoteDiffLike {
-    return this.options.createRemoteDiffService?.(client, this.isHardExcluded.bind(this)) ??
-      new RemoteDiffService(client as any, this.isHardExcluded.bind(this));
+    if (this.options.createRemoteDiffService) {
+      return this.options.createRemoteDiffService(client, this.isHardExcluded.bind(this));
+    }
+    return new RemoteDiffService(this.requireRemoteDiffClient(client), this.isHardExcluded.bind(this));
+  }
+
+  private requireRemoteDiffClient(client: GitLabClientLike): RemoteDiffClient {
+    if (!isRemoteDiffClient(client)) {
+      throw new Error("GitLab client does not support remote diff discovery");
+    }
+    return client;
   }
 
   private createIgnoreMatcher(): IgnoreMatcherLike {
@@ -860,6 +868,10 @@ export class SyncManager {
       normalized.startsWith(runtimeDir)
     );
   }
+}
+
+function isRemoteDiffClient(client: GitLabClientLike): client is GitLabClientLike & RemoteDiffClient {
+  return typeof (client as Partial<RemoteDiffClient>).compare === "function";
 }
 
 export default SyncManager;

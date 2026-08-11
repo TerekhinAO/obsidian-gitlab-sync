@@ -8,7 +8,7 @@ export type RemoteChange =
   | { type: "delete"; path: string }
   | { type: "rename"; oldPath: string; newPath: string };
 
-interface RemoteDiffClient {
+export interface RemoteDiffClient {
   compare(from: string, to: string): Promise<GitLabCompareResult>;
   getTree(ref: string): Promise<GitLabTreeItem[]>;
 }

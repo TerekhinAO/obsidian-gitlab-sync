@@ -278,11 +278,7 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
   }
 
   private async readToken(): Promise<string | null> {
-    const storage = (this.app as any).secretStorage;
-    if (!storage?.getSecret) {
-      return null;
-    }
-    const token = await storage.getSecret(this.settings.tokenSecretName);
+    const token = await this.app.secretStorage.getSecret(this.settings.tokenSecretName);
     return token?.trim() || null;
   }
 

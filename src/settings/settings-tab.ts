@@ -4,13 +4,6 @@ import type { LocalSyncState } from "../settings/settings";
 import { copyToClipboard } from "../utils";
 import { ConnectConfirmModal } from "../views/connect-confirm-modal";
 
-function secretStorage(app: App): {
-  getSecret?: (key: string) => Promise<string | null>;
-  setSecret?: (key: string, value: string) => Promise<void>;
-} {
-  return (app as any).secretStorage ?? {};
-}
-
 export interface VaultSetupViewState {
   initialized: boolean;
   title: string;
@@ -108,12 +101,7 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
       )
       .addText((text) => {
         text.setPlaceholder("glpat-...").onChange(async (value) => {
-          const storage = secretStorage(this.app);
-          if (!storage.setSecret) {
-            new Notice("SecretStorage is not available in this Obsidian version");
-            return;
-          }
-          await storage.setSecret(this.plugin.settings.tokenSecretName, value);
+          await this.app.secretStorage.setSecret(this.plugin.settings.tokenSecretName, value);
         });
         text.inputEl.type = "password";
         tokenInput = text;
