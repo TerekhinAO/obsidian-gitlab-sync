@@ -6,6 +6,20 @@ GitLab Gitless Sync keeps a vault and a single GitLab repository branch in sync 
 GitLab REST API. It is designed for mobile devices (where Git is unavailable) while staying fully
 interoperable with an ordinary desktop Git workflow against the same branch.
 
+## What you get
+
+- **Desktop and mobile support** — sync the same vault from Obsidian on desktop, Android, and iPhone.
+- **No local Git required** — the plugin talks to GitLab through its REST API, so it works on devices
+  where Git cannot be installed.
+- **Automatic sync modes** — sync on startup, after edits, on a timer, and on mobile app
+  foreground/background events.
+- **Manual sync when you need it** — run **Sync with GitLab** from the sidebar icon or command
+  palette at any time.
+- **Data-preserving merge and conflict handling** — the default strategy tries to auto-merge text
+  files and keeps both versions as separate files when a conflict cannot be merged.
+- **Safer token and sync state storage** — the GitLab token stays in Obsidian SecretStorage, while
+  local sync metadata stays on the device and is never committed.
+
 ## Installation
 
 Requires Obsidian 1.11.4 or newer.
