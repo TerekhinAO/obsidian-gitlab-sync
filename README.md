@@ -8,6 +8,8 @@ interoperable with an ordinary desktop Git workflow against the same branch.
 
 ## Installation
 
+Requires Obsidian 1.11.4 or newer.
+
 ### Community plugins
 
 Once available in the Obsidian Community Plugins registry: open **Settings → Community plugins →
