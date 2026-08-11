@@ -15,8 +15,8 @@ interoperable with an ordinary desktop Git workflow against the same branch.
   foreground/background events.
 - **Manual sync when you need it** — run **Sync with GitLab** from the sidebar icon or command
   palette at any time.
-- **Data-preserving merge and conflict handling** — the default strategy tries to auto-merge text
-  files and keeps both versions as separate files when a conflict cannot be merged.
+- **Data-safe sync** — the default strategy tries to auto-merge text files first, and when
+  files conflict, both versions are kept as separate files.
 - **Safer token and sync state storage** — the GitLab token stays in Obsidian SecretStorage, while
   local sync metadata stays on the device and is never committed.
 
