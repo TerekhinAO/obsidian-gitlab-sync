@@ -98,7 +98,7 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
     let tokenInput: TextComponent;
     new Setting(containerEl)
       .setName("GitLab token")
-      .setDesc("Stored in Obsidian SecretStorage, not plugin data")
+      .setDesc("Stored securely in Obsidian SecretStorage on this device")
       .addButton((button) =>
         button.setIcon("eye-off").onClick(() => {
           tokenInput.inputEl.type =

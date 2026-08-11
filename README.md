@@ -76,7 +76,8 @@ Fill in **Settings → GitLab Gitless Sync → GitLab repository**:
   (e.g. `https://gitlab.example.com`). HTTPS is required.
 - **Project path** — namespace and project path, for example `developing/obsidian-world`.
 - **Branch** — the branch to synchronize, for example `main`.
-- **GitLab token** — the token from step 1. Stored in Obsidian SecretStorage, never in plugin data.
+- **GitLab token** — the token from step 1. Stored securely in Obsidian SecretStorage on this
+  device.
 - **Commit author name** and **Commit author email** — used as the author of every commit the plugin
   creates. Required.
 
@@ -93,9 +94,6 @@ anything; nothing happens until you confirm. One button handles every starting s
   downloaded and nothing is deleted. This path needs the commit author name and email, and the vault
   must contain at least one syncable file (an empty vault plus an empty repository has nothing to
   push and reports an error).
-- **Repository has commits but the configured Branch does not exist.** Nothing is changed: a notice
-  lists the available branches and the repository default. Set **Branch** to one of them and press
-  Connect again.
 
 Keep Obsidian open until the confirmation notice appears. After that, **Sync with GitLab** (sidebar
 icon or command palette) syncs on demand at any time.
@@ -115,15 +113,15 @@ keep it current:
 - **Sync on startup** — on. One sync when Obsidian launches.
 
 **On mobile — sync on app lifecycle.** iOS and Android suspend the app instead of leaving it
-running, so timers and startup sync are unreliable there; the system foreground/background
-transitions are the signal that actually fires:
+running, so foreground/background transitions are the most reliable mobile sync triggers:
 
 - **Sync on app foreground (mobile only)** — on. Runs a sync when you reopen Obsidian from the
   background. This is the reliable mobile replacement for *Sync on startup*.
 - **Sync on app background (mobile only)** — optional. Runs a sync when you leave the app. It gets
   your latest notes out sooner, but some devices suspend the app before the request finishes, so
   treat it as best-effort rather than a guarantee.
-- **Sync on startup** — off. The app is usually suspended before it would run.
+- **Sync on startup** — on. Useful when Obsidian is launched cold; foreground sync still handles
+  the more common reopen-from-background case.
 - **Sync on a timer** — off. A suspended app has no timer.
 
 Every mode runs the same engine as the manual button, and each trigger has a cooldown so overlapping
