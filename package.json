@@ -1,6 +1,6 @@
 {
   "name": "gitlab-gitless-sync",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "description": "Sync a vault with a GitLab repository without requiring Git.",
   "main": "main.js",
   "scripts": {
