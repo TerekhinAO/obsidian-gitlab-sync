@@ -17,7 +17,7 @@ interoperable with an ordinary desktop Git workflow against the same branch.
   palette at any time.
 - **Data-safe sync** — the default strategy tries to auto-merge text files first, and when
   files conflict, both versions are kept as separate files.
-- **Safer token and sync state storage** — the GitLab token stays in Obsidian SecretStorage, while
+- **Secure token storage** — the GitLab token stays in Obsidian SecretStorage, while
   local sync metadata stays on the device and is never committed.
 
 ## Installation
@@ -63,10 +63,12 @@ Four steps: create the repository and a token, connect the vault, turn on automa
    access, so prefer a project token where possible.
 
 4. On instances with [fine-grained tokens](https://docs.gitlab.com/auth/tokens/fine_grained_access_tokens_rest/)
-   you can replace the `api` scope with these permissions:
+   you can replace the broad `api` scope with project-limited access:
 
-   - **Projects:** Project Read
-   - **Repository:** Repository Read, Code Read, Commit Read, Commit Create, Branch Read,
+   - **Group and project access:** *Only specific groups or projects that I'm a member of*, then
+     select the vault project.
+   - **Project:** Read
+   - **Repository:** Commit Read, Commit Create, Branch Read, Code Read, Repository Read,
      Repository Tag Read
 
    Fine-grained permissions do not cascade — grant each one explicitly. If the target branch is
@@ -250,6 +252,12 @@ The GitLab token is stored in Obsidian SecretStorage. It is never written to plu
 conflict files, URLs, or GitLab commits. Logs redact credential-shaped fields such as
 `PRIVATE-TOKEN`, `Authorization`, `token`, and `password`. All traffic is HTTPS — a non-HTTPS base
 URL is rejected.
+
+## Privacy
+
+The plugin communicates only with the GitLab instance configured by the user. It does not collect
+telemetry or analytics and does not send vault data to any other service. A GitLab account/project
+and access token are required.
 
 ## Development
 
