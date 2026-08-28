@@ -193,6 +193,7 @@ export class MockElement {
 export class MockButtonComponent {
   buttonText = "";
   cta = false;
+  disabled = false;
   clickHandler: (() => void) | null = null;
 
   setButtonText(text: string): this {
@@ -202,6 +203,11 @@ export class MockButtonComponent {
 
   setCta(): this {
     this.cta = true;
+    return this;
+  }
+
+  setDisabled(disabled: boolean): this {
+    this.disabled = disabled;
     return this;
   }
 

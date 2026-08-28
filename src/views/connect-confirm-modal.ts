@@ -1,15 +1,19 @@
-import { Modal, Setting } from "obsidian";
+import { ButtonComponent, Modal, Notice, Setting } from "obsidian";
 import type { ConnectPreview, ConnectMergePreview, ConnectSeedPreview } from "../sync/bootstrap-service";
 
 const MAX_NAMES = 10;
 
 export class ConnectConfirmModal extends Modal {
+  private inProgress = false;
+  private cancelButton: ButtonComponent | null = null;
+  private confirmButton: ButtonComponent | null = null;
+
   constructor(
     app: any,
     private readonly projectPath: string,
     private readonly branch: string,
     private readonly preview: ConnectPreview,
-    private readonly onConfirm: () => void,
+    private readonly onConfirm: () => void | Promise<void>,
   ) {
     super(app);
   }
@@ -23,13 +27,17 @@ export class ConnectConfirmModal extends Modal {
       this.renderMerge(this.preview);
     }
     new Setting(this.contentEl)
-      .addButton((button) => button.setButtonText("Cancel").onClick(() => this.close()))
-      .addButton((button) =>
+      .addButton((button) => {
+        this.cancelButton = button;
+        button.setButtonText("Cancel").onClick(() => this.close());
+      })
+      .addButton((button) => {
+        this.confirmButton = button;
         button
           .setButtonText(this.preview.mode === "seed" ? "Create first commit" : "Connect")
           .setCta()
-          .onClick(() => this.confirm()),
-      );
+          .onClick(() => void this.confirm());
+      });
   }
 
   private renderMerge(preview: ConnectMergePreview): void {
@@ -77,8 +85,17 @@ export class ConnectConfirmModal extends Modal {
     }
   }
 
-  confirm(): void {
-    this.close();
-    this.onConfirm();
+  async confirm(): Promise<void> {
+    if (this.inProgress) return;
+    this.inProgress = true;
+    this.cancelButton?.setDisabled(true);
+    this.confirmButton?.setDisabled(true).setButtonText("Connecting…");
+    const progress = new Notice("Connecting to GitLab…", 0);
+    try {
+      await this.onConfirm();
+    } finally {
+      progress.hide();
+      this.close();
+    }
   }
 }

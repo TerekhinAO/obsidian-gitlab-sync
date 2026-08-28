@@ -668,6 +668,9 @@ export class SyncManager {
       onRequest: async (diagnostic) => {
         await this.options.logger?.debug("GitLab request", diagnostic);
       },
+      onArchiveDiagnostic: async (diagnostic) => {
+        await this.options.logger?.debug("GitLab archive transport", diagnostic);
+      },
     });
   }
 

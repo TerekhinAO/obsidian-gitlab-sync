@@ -19,6 +19,11 @@ import type {
   GitLabRequestDiagnostic,
   GitLabTreeItem,
 } from "./types";
+import {
+  requestArchiveWithNode,
+  type ArchiveFallbackRequest,
+  type ArchiveFallbackResponse,
+} from "./archive-fallback";
 
 const DEFAULT_MAX_PAYLOAD_BYTES = 250 * 1024 * 1024;
 const DEFAULT_PAYLOAD_WARNING_BYTES = 20 * 1024 * 1024;
@@ -35,6 +40,7 @@ interface RequestUrlOptions {
   url: string;
   method?: string;
   headers?: Record<string, string>;
+  accept?: string;
   contentType?: string;
   body?: string;
   throw?: boolean;
@@ -47,7 +53,26 @@ export interface GitLabClientOptions {
   payloadWarningBytes?: number;
   onPayloadWarning?: (warning: GitLabPayloadWarning) => void;
   onRequest?: (diagnostic: GitLabRequestDiagnostic) => void | Promise<void>;
+  requestArchiveFallback?: (
+    request: ArchiveFallbackRequest,
+  ) => Promise<ArchiveFallbackResponse>;
+  onArchiveDiagnostic?: (diagnostic: ArchiveTransportDiagnostic) => void | Promise<void>;
   sleep?: (milliseconds: number) => Promise<void>;
+}
+
+export interface ArchiveTransportDiagnostic {
+  transport: "obsidian-request-url" | "node-https";
+  request: {
+    method: "GET";
+    url: string;
+    headers: Record<string, string>;
+  };
+  response: {
+    status: number;
+    headers: Record<string, string>;
+    bodyBytes: number;
+    bodyPreview: string;
+  };
 }
 
 export class GitLabClient {
@@ -58,6 +83,12 @@ export class GitLabClient {
   private readonly payloadWarningBytes: number;
   private readonly onPayloadWarning?: (warning: GitLabPayloadWarning) => void;
   private readonly onRequest?: (diagnostic: GitLabRequestDiagnostic) => void | Promise<void>;
+  private readonly requestArchiveFallback: (
+    request: ArchiveFallbackRequest,
+  ) => Promise<ArchiveFallbackResponse>;
+  private readonly onArchiveDiagnostic?: (
+    diagnostic: ArchiveTransportDiagnostic,
+  ) => void | Promise<void>;
   private readonly sleep: (milliseconds: number) => Promise<void>;
   private readonly baseUrl: string;
   private readonly projectPath: string;
@@ -79,6 +110,8 @@ export class GitLabClient {
       options.payloadWarningBytes ?? DEFAULT_PAYLOAD_WARNING_BYTES;
     this.onPayloadWarning = options.onPayloadWarning;
     this.onRequest = options.onRequest;
+    this.requestArchiveFallback = options.requestArchiveFallback ?? requestArchiveWithNode;
+    this.onArchiveDiagnostic = options.onArchiveDiagnostic;
     this.sleep =
       options.sleep ??
       ((milliseconds: number) =>
@@ -160,9 +193,36 @@ export class GitLabClient {
   }
 
   async downloadArchive(ref: string): Promise<ArrayBuffer> {
-    return await this.requestArrayBuffer(
-      `/repository/archive.zip?sha=${encodeURIComponent(ref)}&include_lfs_blobs=false`,
-    );
+    const path = `/repository/archive.zip?sha=${encodeURIComponent(ref)}&include_lfs_blobs=false`;
+    try {
+      return await this.requestArrayBuffer(path, {
+        accept: "application/zip",
+        onResponse: async (response, method, url) => {
+          await this.archiveDiagnostic("obsidian-request-url", response, method, url, false);
+        },
+      });
+    } catch (error) {
+      if (!(error instanceof GitLabApiError) || error.status !== 406) {
+        throw error;
+      }
+    }
+
+    const url = `${this.apiBase}${path}`;
+    const request: ArchiveFallbackRequest = {
+      url,
+      method: "GET",
+      headers: {
+        Accept: "application/zip",
+        "PRIVATE-TOKEN": this.token,
+        "User-Agent": "curl/8.7.1",
+      },
+    };
+    const response = await this.requestArchiveFallback(request);
+    await this.archiveDiagnostic("node-https", response, "GET", url, true);
+    if (response.status >= 200 && response.status < 300) {
+      return response.arrayBuffer;
+    }
+    throw this.toError(response, "GET", url);
   }
 
   async createCommit(input: CreateCommitInput): Promise<CreatedGitLabCommit> {
@@ -191,8 +251,17 @@ export class GitLabClient {
     return response.json;
   }
 
-  private async requestArrayBuffer(path: string): Promise<ArrayBuffer> {
-    const response = await this.requestArrayBufferResponse(path);
+  private async requestArrayBuffer(
+    path: string,
+    options: Pick<RequestUrlOptions, "accept"> & {
+      onResponse?: (
+        response: RequestUrlResponse,
+        method: string,
+        url: string,
+      ) => void | Promise<void>;
+    } = {},
+  ): Promise<ArrayBuffer> {
+    const response = await this.requestArrayBufferResponse(path, options);
     return response.arrayBuffer;
   }
 
@@ -205,14 +274,26 @@ export class GitLabClient {
 
   private async requestArrayBufferResponse(
     path: string,
-    options: Pick<RequestUrlOptions, "method" | "body" | "contentType"> = {},
+    options: Pick<RequestUrlOptions, "method" | "body" | "contentType" | "accept"> & {
+      onResponse?: (
+        response: RequestUrlResponse,
+        method: string,
+        url: string,
+      ) => void | Promise<void>;
+    } = {},
   ): Promise<{ json: never; arrayBuffer: ArrayBuffer; headers?: Record<string, string> }> {
     return await this.request(path, options, "arrayBuffer");
   }
 
   private async request<T>(
     path: string,
-    options: Pick<RequestUrlOptions, "method" | "body" | "contentType">,
+    options: Pick<RequestUrlOptions, "method" | "body" | "contentType" | "accept"> & {
+      onResponse?: (
+        response: RequestUrlResponse,
+        method: string,
+        url: string,
+      ) => void | Promise<void>;
+    },
     responseType: "json" | "arrayBuffer",
   ): Promise<{ json: T; arrayBuffer: ArrayBuffer; headers?: Record<string, string> }> {
     let attempt = 0;
@@ -225,7 +306,7 @@ export class GitLabClient {
         response = (await requestUrl({
           url,
           method,
-          headers: this.headers(),
+          headers: this.headers(responseType, options.accept),
           contentType: options.contentType,
           body: options.body,
           throw: false,
@@ -236,6 +317,8 @@ export class GitLabClient {
           `GitLab request failed before response for ${method} ${url}: ${errorMessage(error)}`,
         );
       }
+
+      await options.onResponse?.(response, method, url);
 
       if (response.status >= 200 && response.status < 300) {
         return {
@@ -274,11 +357,40 @@ export class GitLabClient {
     return url;
   }
 
-  private headers(): Record<string, string> {
+  private headers(
+    responseType: "json" | "arrayBuffer",
+    accept?: string,
+  ): Record<string, string> {
     return {
-      Accept: "application/json",
+      Accept: accept ?? (responseType === "json" ? "application/json" : "*/*"),
       "PRIVATE-TOKEN": this.token,
     };
+  }
+
+  private async archiveDiagnostic(
+    transport: ArchiveTransportDiagnostic["transport"],
+    response: RequestUrlResponse,
+    method: string,
+    url: string,
+    curlUserAgent: boolean,
+  ): Promise<void> {
+    if (!this.onArchiveDiagnostic) return;
+    const headers: Record<string, string> = {
+      Accept: "application/zip",
+      "PRIVATE-TOKEN": `[REDACTED length=${this.token.length}]`,
+    };
+    if (curlUserAgent) headers["User-Agent"] = "curl/8.7.1";
+    const text = response.text ?? "";
+    await this.onArchiveDiagnostic({
+      transport,
+      request: { method: "GET", url, headers },
+      response: {
+        status: response.status,
+        headers: response.headers ?? {},
+        bodyBytes: response.arrayBuffer?.byteLength ?? new TextEncoder().encode(text).byteLength,
+        bodyPreview: response.status >= 200 && response.status < 300 ? "" : text.slice(0, 500),
+      },
+    });
   }
 
   private toError(response: RequestUrlResponse, method: string, url: string): Error {
@@ -333,9 +445,9 @@ export class GitLabClient {
     }
 
     const preview = responsePreview(response);
+    const details = bodyMessage ? ` Message: ${bodyMessage}.` : "";
     const suffix = preview ? ` Body preview: ${preview}` : "";
-    return bodyMessage ??
-      `GitLab request failed with status ${response.status} for ${method} ${url}.${suffix}`;
+    return `GitLab request failed with status ${response.status} for ${method} ${url}.${details}${suffix}`;
   }
 
   private header(

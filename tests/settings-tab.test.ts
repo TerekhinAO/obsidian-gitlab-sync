@@ -90,6 +90,34 @@ describe("settings tab render", () => {
     expect(plugin.previewConnect).toHaveBeenCalledTimes(1);
   });
 
+  it("shows loading and blocks a second preview while GitLab is being checked", async () => {
+    let finishPreview!: (value: ConnectPreview | null) => void;
+    const plugin = fakePlugin();
+    plugin.previewConnect = vi.fn(() => new Promise((resolve) => {
+      finishPreview = resolve;
+    }));
+    const notices: string[] = [];
+    (globalThis as any).__noticeSpy = (message: string) => notices.push(message);
+    const container = renderTab(plugin);
+    const connectButton = container.buttons.find(
+      (button) => button.buttonText === "Connect to GitLab",
+    )!;
+
+    const firstClick = connectButton.clickHandler!();
+    connectButton.clickHandler!();
+
+    expect(connectButton.disabled).toBe(true);
+    expect(connectButton.buttonText).toBe("Checking GitLab…");
+    expect(plugin.previewConnect).toHaveBeenCalledTimes(1);
+    expect(notices).toContain("Checking GitLab…");
+
+    finishPreview(null);
+    await firstClick;
+    expect(connectButton.disabled).toBe(false);
+    expect(connectButton.buttonText).toBe("Connect to GitLab");
+    delete (globalThis as any).__noticeSpy;
+  });
+
   it("opens the confirm modal and connects when preview is non-null", async () => {
     const plugin = fakePlugin();
     plugin.previewConnect = vi.fn(async (): Promise<ConnectPreview | null> => ({

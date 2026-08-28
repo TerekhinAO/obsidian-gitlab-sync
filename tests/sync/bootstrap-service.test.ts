@@ -5,7 +5,9 @@ import { calculateGitBlobId } from "../../src/sync/conflict-resolver";
 import type { GitLabBranch, GitLabTreeItem } from "../../src/gitlab/types";
 
 vi.mock("obsidian", () => ({
-  normalizePath: (path: string) => path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, ""),
+  normalizePath: (path: string) => path === ""
+    ? "/"
+    : path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, ""),
 }));
 
 function bytes(value: string | number[]): Uint8Array {
@@ -194,6 +196,21 @@ describe("BootstrapService", () => {
     expect(setup.read("folder/note.md")).toEqual(bytes("hello"));
     expect(setup.read(".obsidian/plugins/gitlab-gitless-sync/main.js")).toEqual(bytes("local plugin"));
     expect(setup.read("generated-root/folder/note.md")).toBeUndefined();
+  });
+
+  it("ignores the generated ZIP root entry before checking materialized symlinks", async () => {
+    const archive = await zip([
+      {
+        path: "generated-root/",
+        externalFileAttributes: 0o120000 << 16,
+      },
+      { path: "generated-root/note.md", content: "remote" },
+    ]);
+    const setup = await fixture({ archive });
+
+    await setup.service.merge();
+
+    expect(setup.read("note.md")).toEqual(bytes("remote"));
   });
 
   it.each([

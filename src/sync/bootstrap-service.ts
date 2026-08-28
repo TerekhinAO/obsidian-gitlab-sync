@@ -190,17 +190,18 @@ export class BootstrapService {
 
   private describeEntry(entry: Entry): ArchiveOperation | null {
     const rawPath = entry.filename;
-    if (this.isUnsafeArchivePath(rawPath) || this.isSymlink(entry)) {
+    if (this.isUnsafeArchivePath(rawPath)) {
       throw new Error(`Unsafe GitLab archive entry: ${rawPath}`);
     }
 
     const pathParts = rawPath.split("/");
-    const targetPath = normalizePath(pathParts.length > 1 ? pathParts.slice(1).join("/") : "");
-    if (targetPath === "") {
+    const relativePath = pathParts.length > 1 ? pathParts.slice(1).join("/") : "";
+    if (relativePath === "") {
       return null;
     }
+    const targetPath = normalizePath(relativePath);
 
-    if (this.isUnsafeArchivePath(targetPath)) {
+    if (this.isUnsafeArchivePath(targetPath) || this.isSymlink(entry)) {
       throw new Error(`Unsafe GitLab archive entry: ${rawPath}`);
     }
 

@@ -36,6 +36,8 @@ export function vaultSetupViewState(state: LocalSyncState): VaultSetupViewState 
 }
 
 export default class GitLabSyncSettingsTab extends PluginSettingTab {
+  private connectPreviewInProgress = false;
+
   constructor(
     app: App,
     private plugin: GitLabGitlessSyncPlugin,
@@ -149,25 +151,35 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
       .setDesc(setupState.description);
 
     if (setupState.showSetupActions) {
-      setupSetting.addButton((button) =>
+      setupSetting.addButton((button) => {
         button
           .setButtonText("Connect to GitLab")
           .setCta()
           .onClick(async () => {
-            const preview = await this.plugin.previewConnect();
-            if (!preview) return; // error/misconfig already surfaced by previewConnect
-            new ConnectConfirmModal(
-              this.plugin.app,
-              this.plugin.settings.projectPath,
-              this.plugin.settings.branch,
-              preview,
-              async () => {
-                await this.plugin.connect(preview);
-                this.display();
-              },
-            ).open();
-          }),
-      );
+            if (this.connectPreviewInProgress) return;
+            this.connectPreviewInProgress = true;
+            button.setDisabled(true).setButtonText("Checking GitLab…");
+            const progress = new Notice("Checking GitLab…", 0);
+            try {
+              const preview = await this.plugin.previewConnect();
+              if (!preview) return; // error/misconfig already surfaced by previewConnect
+              new ConnectConfirmModal(
+                this.plugin.app,
+                this.plugin.settings.projectPath,
+                this.plugin.settings.branch,
+                preview,
+                async () => {
+                  await this.plugin.connect(preview);
+                  this.display();
+                },
+              ).open();
+            } finally {
+              progress.hide();
+              this.connectPreviewInProgress = false;
+              button.setDisabled(false).setButtonText("Connect to GitLab");
+            }
+          });
+      });
     }
 
     if (setupState.showResetAction) {

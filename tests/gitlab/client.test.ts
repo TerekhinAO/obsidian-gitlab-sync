@@ -275,6 +275,100 @@ describe("GitLabClient", () => {
     );
   });
 
+  it("requests the ZIP archive with GitLab content negotiation", async () => {
+    fake.queue({ status: 200, arrayBuffer: arrayBufferFromText("zip") });
+
+    await new GitLabClient(settings, "token").downloadArchive("head-sha");
+
+    expect(fake.calls[0].url).toBe(
+      "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/archive.zip?sha=head-sha&include_lfs_blobs=false",
+    );
+    expect(fake.calls[0].headers).toMatchObject({
+      Accept: "application/zip",
+      "PRIVATE-TOKEN": "token",
+    });
+  });
+
+  it("falls back to curl-equivalent HTTPS when Obsidian rejects the archive", async () => {
+    fake.queue({
+      status: 406,
+      headers: { "content-type": "application/json", server: "cloudflare" },
+      json: { message: "406 Not Acceptable" },
+      text: '{"message":"406 Not Acceptable"}',
+    });
+    const diagnostics: unknown[] = [];
+    const zip = arrayBufferFromText("PK zip bytes");
+
+    const result = await new GitLabClient(settings, "glpat-secret", {
+      requestArchiveFallback: async (request) => {
+        if (
+          request.url !==
+            "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/archive.zip?sha=head-sha&include_lfs_blobs=false" ||
+          request.method !== "GET" ||
+          request.headers.Accept !== "application/zip" ||
+          request.headers["PRIVATE-TOKEN"] !== "glpat-secret"
+        ) {
+          throw new Error("fallback request does not match the working curl request");
+        }
+        return {
+          status: 200,
+          headers: {
+            "content-type": "application/octet-stream",
+            "content-length": String(zip.byteLength),
+          },
+          arrayBuffer: zip,
+          text: "",
+        };
+      },
+      onArchiveDiagnostic: (diagnostic) => {
+        diagnostics.push(diagnostic);
+      },
+    }).downloadArchive("head-sha");
+
+    expect(result).toEqual(zip);
+    expect(diagnostics).toEqual([
+      {
+        transport: "obsidian-request-url",
+        request: {
+          method: "GET",
+          url: "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/archive.zip?sha=head-sha&include_lfs_blobs=false",
+          headers: {
+            Accept: "application/zip",
+            "PRIVATE-TOKEN": "[REDACTED length=12]",
+          },
+        },
+        response: {
+          status: 406,
+          headers: { "content-type": "application/json", server: "cloudflare" },
+          bodyBytes: 32,
+          bodyPreview: '{"message":"406 Not Acceptable"}',
+        },
+      },
+      {
+        transport: "node-https",
+        request: {
+          method: "GET",
+          url: "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/archive.zip?sha=head-sha&include_lfs_blobs=false",
+          headers: {
+            Accept: "application/zip",
+            "PRIVATE-TOKEN": "[REDACTED length=12]",
+            "User-Agent": "curl/8.7.1",
+          },
+        },
+        response: {
+          status: 200,
+          headers: {
+            "content-type": "application/octet-stream",
+            "content-length": String(zip.byteLength),
+          },
+          bodyBytes: zip.byteLength,
+          bodyPreview: "",
+        },
+      },
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toContain("glpat-secret");
+  });
+
   it.each([
     [401, GitLabAuthenticationError],
     [403, GitLabForbiddenError],
@@ -297,6 +391,22 @@ describe("GitLabClient", () => {
     if (status === 429) {
       expect(error.retryAfterSeconds).toBe(7);
     }
+  });
+
+  it("includes the request method and URL when GitLab returns a JSON error message", async () => {
+    fake.queue({ status: 406, json: { message: "406 Not Acceptable" } });
+
+    const error = await new GitLabClient(settings, "token")
+      .getBranch()
+      .catch((caught) => caught);
+
+    expect(error.message).toContain("status 406");
+    expect(error.message).toContain("GET");
+    expect(error.message).toContain(
+      "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/branches/main",
+    );
+    expect(error.message).toContain("406 Not Acceptable");
+    expect(error.message).not.toContain("PRIVATE-TOKEN");
   });
 
   it("reports URL and body preview when GitLab returns non-JSON error content", async () => {
