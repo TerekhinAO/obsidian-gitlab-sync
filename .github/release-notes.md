@@ -1,7 +1,7 @@
-Initial Community Plugins release.
+GitLab connection reliability update.
 
-- Sync Obsidian vaults with GitLab without requiring local Git.
-- Supports desktop and mobile, including iPhone.
-- Includes manual sync and automatic sync modes for startup, edits, timers, and mobile app lifecycle events.
-- Uses data-safe sync defaults: text files are auto-merged when possible, and conflicting versions are kept as separate files.
-- Stores the GitLab token securely in Obsidian SecretStorage.
+- Restores repository archive downloads when Obsidian's HTTP transport receives `406 Not Acceptable` from GitLab.
+- Correctly handles the generated root directory in GitLab ZIP archives while retaining path traversal and symlink protections.
+- Shows persistent loading notices during connection checks and downloads.
+- Disables Connect controls while work is in progress to prevent duplicate connection attempts.
+- Adds safer request diagnostics without exposing GitLab token values.

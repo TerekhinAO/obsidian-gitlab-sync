@@ -1,7 +1,7 @@
 {
   "id": "gitlab-gitless-sync",
   "name": "GitLab Gitless Sync",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "minAppVersion": "1.11.4",
   "description": "Sync a vault with a GitLab repository without requiring Git.",
   "author": "Alexander Terekhin",
