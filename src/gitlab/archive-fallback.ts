@@ -17,8 +17,7 @@ export async function requestArchiveWithNode(
   request: ArchiveFallbackRequest,
 ): Promise<ArchiveFallbackResponse> {
   const url = new URL(request.url);
-  // Electron loads Obsidian plugins as CommonJS; dynamic import() is not resolved there.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- Obsidian's CommonJS loader cannot resolve dynamic imports.
   const transport = require(url.protocol === "https:" ? "https" : "http") as
     typeof import("https");
 
