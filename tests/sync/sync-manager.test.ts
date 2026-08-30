@@ -4,6 +4,7 @@ import type { GitLabBranch, GitLabCommitAction, CreatedGitLabCommit } from "../.
 import type { DirtyEntry, GitLabSyncSettings, LocalSyncState, MaterializeOperation, PendingTransaction, PluginData, TrackedFile } from "../../src/sync/types";
 import type { RemoteChange } from "../../src/sync/remote-diff";
 import type { SyncPlan } from "../../src/sync/sync-planner";
+import type { DevicePlatform } from "../../src/device-label";
 
 const settings: GitLabSyncSettings = {
   gitlabBaseUrl: "https://gitlab.com",
@@ -47,6 +48,35 @@ describe("SyncManager", () => {
     });
     expect(firstResult.status).toBe("success");
     expect(fixture.gitlab.createCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("labels the commit with the configured author and the detected device", async () => {
+    const fixture = managerFixture({
+      data: initializedData({ dirtyEntries: { "note.md": dirty("note.md") } }),
+      platform: { isMacOS: true },
+    });
+    fixture.planner.plan.mockResolvedValueOnce(localCommitPlan("remote-a", "note.md"));
+
+    await expect(fixture.manager.sync("foreground")).resolves.toMatchObject({ status: "success" });
+
+    expect(fixture.gitlab.createCommit).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Sync vault from Mobile User (Mac) foreground" }),
+    );
+  });
+
+  it("labels the commit with the detected device alone when no author is configured", async () => {
+    const fixture = managerFixture({
+      data: initializedData({ dirtyEntries: { "note.md": dirty("note.md") } }),
+      settings: { ...settings, authorName: "", authorEmail: "" },
+      platform: { isIosApp: true },
+    });
+    fixture.planner.plan.mockResolvedValueOnce(localCommitPlan("remote-a", "note.md"));
+
+    await expect(fixture.manager.sync("manual")).resolves.toMatchObject({ status: "success" });
+
+    expect(fixture.gitlab.createCommit).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Sync vault from iPhone" }),
+    );
   });
 
   it("recovers a pending transaction before reading the GitLab branch", async () => {
@@ -345,6 +375,7 @@ function managerFixture(options: {
   remoteChanges?: RemoteChange[];
   remoteTree?: any[];
   localFiles?: Record<string, string>;
+  platform?: DevicePlatform;
 }) {
   const data = options.settings
     ? { ...options.data, settings: options.settings }
@@ -446,6 +477,7 @@ function managerFixture(options: {
       now: () => 1234,
       nowDate: () => new Date("2026-07-26T20:15:00+03:00"),
       notice: (message) => notices.push(message),
+      platform: options.platform ?? { isMacOS: true },
     }),
     notices,
   };

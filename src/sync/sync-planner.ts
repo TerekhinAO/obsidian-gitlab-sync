@@ -22,7 +22,8 @@ interface SyncPlannerOptions {
   conflictResolver?: ConflictResolver;
   getRemoteVersion?: (path: string, remoteSha: string) => Promise<VersionState>;
   getLastCommitId?: (path: string, remoteSha: string) => Promise<string | null>;
-  deviceName?: string;
+  /** Label for the local side, forwarded to conflict copy paths and reports. */
+  deviceName: string;
   conflictStrategy?: ConflictStrategy;
 }
 
@@ -30,9 +31,9 @@ export class SyncPlanner {
   private readonly conflictResolver: ConflictResolver;
   private readonly getRemoteVersion: (path: string, remoteSha: string) => Promise<VersionState>;
   private readonly getLastCommitId: (path: string, remoteSha: string) => Promise<string | null>;
-  private readonly deviceName?: string;
+  private readonly deviceName: string;
 
-  constructor(options: SyncPlannerOptions = {}) {
+  constructor(options: SyncPlannerOptions) {
     this.conflictResolver = options.conflictResolver ??
       new ConflictResolver({ strategy: options.conflictStrategy });
     this.getRemoteVersion = options.getRemoteVersion ?? (async () => missing());

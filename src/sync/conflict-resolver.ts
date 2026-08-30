@@ -30,7 +30,8 @@ export class ConflictResolver {
     remote: Record<string, VersionState>;
     trackedFiles: Record<string, TrackedFile>;
     now: Date;
-    deviceName?: string;
+    /** Label for the local side, shown in conflict copy paths and reports. */
+    deviceName: string;
     occupiedPaths?: Iterable<string>;
   }): Promise<ConflictResolutionPlan> {
     const plan: ConflictResolutionPlan = {
@@ -45,7 +46,7 @@ export class ConflictResolver {
       ...input.snapshots.map((entry) => entry.path),
       ...(input.occupiedPaths ?? []),
     ]);
-    const deviceName = input.deviceName ?? "iPhone";
+    const deviceName = input.deviceName;
 
     for (const snapshot of input.snapshots) {
       const remote = input.remote[snapshot.path] ?? { exists: false, bytes: null };
@@ -180,13 +181,13 @@ async function preserveBoth(
   strategy: ConflictStrategy,
 ): Promise<void> {
   if (strategy === "local") {
-    await preserveBothLocalFirst(path, local, remote, now, occupied, plan);
+    await preserveBothLocalFirst(path, local, remote, now, deviceName, occupied, plan);
     return;
   }
 
   if (!local.exists || local.bytes === null) {
     materialize(path, remote, plan);
-    const markerBytes = new TextEncoder().encode(deletionMarker(path));
+    const markerBytes = new TextEncoder().encode(deletionMarker(path, deviceName));
     const markerPath = nextAvailablePath(
       conflictPath(path, "deletion conflict", deviceName, now, ".md"),
       occupied,
@@ -202,7 +203,7 @@ async function preserveBoth(
   );
   await addCreatedConflict(
     copyPath,
-    conflictCopyBytes(path, local, remote, "remote"),
+    conflictCopyBytes(path, local, remote, "remote", deviceName),
     occupied,
     plan,
   );
@@ -213,12 +214,13 @@ async function preserveBothLocalFirst(
   local: VersionState,
   remote: VersionState,
   now: Date,
+  deviceName: string,
   occupied: Set<string>,
   plan: ConflictResolutionPlan,
 ): Promise<void> {
   await commitOriginal(path, local, remote.exists, plan);
 
-  const copyBytes = conflictCopyBytes(path, remote, local, "local");
+  const copyBytes = conflictCopyBytes(path, remote, local, "local", deviceName);
   const copyPath = nextAvailablePath(
     conflictPath(path, "conflict", "GitLab", now, copyBytes === remote.bytes ? undefined : ".md"),
     occupied,
@@ -352,11 +354,11 @@ function timestamp(now: Date): string {
   ].join("-") + ` ${pad(now.getHours())}-${pad(now.getMinutes())}`;
 }
 
-function deletionMarker(path: string): string {
+function deletionMarker(path: string, deviceName: string): string {
   return [
-    "# Sync conflict: deletion on iPhone",
+    `# Sync conflict: deletion on ${deviceName}`,
     "",
-    `The file \`${path}\` was deleted on iPhone, but the GitLab version changed after the last successful sync.`,
+    `The file \`${path}\` was deleted on ${deviceName}, but the GitLab version changed after the last successful sync.`,
     "",
     "The GitLab version was kept at the original path. Review it and delete it manually if deletion is still intended.",
     "",
@@ -368,16 +370,17 @@ function conflictCopyBytes(
   copy: VersionState,
   original: VersionState,
   keptSide: ConflictStrategy,
+  deviceName: string,
 ): Uint8Array {
   if (!copy.exists || copy.bytes === null) {
-    return new TextEncoder().encode(deletedSideMarker(path, keptSide));
+    return new TextEncoder().encode(deletedSideMarker(path, keptSide, deviceName));
   }
 
   if (!isProbablyText(path, copy.bytes) || (original.exists && original.bytes !== null && !isProbablyText(path, original.bytes))) {
     return copy.bytes;
   }
 
-  return new TextEncoder().encode(conflictReport(path, copy, original, keptSide));
+  return new TextEncoder().encode(conflictReport(path, copy, original, keptSide, deviceName));
 }
 
 function conflictReport(
@@ -385,9 +388,10 @@ function conflictReport(
   copy: VersionState,
   original: VersionState,
   keptSide: ConflictStrategy,
+  deviceName: string,
 ): string {
-  const copySide = keptSide === "remote" ? "iPhone" : "GitLab";
-  const keptLabel = keptSide === "remote" ? "GitLab" : "iPhone";
+  const copySide = keptSide === "remote" ? deviceName : "GitLab";
+  const keptLabel = keptSide === "remote" ? "GitLab" : deviceName;
   const localText = keptSide === "remote"
     ? versionText(copy)
     : versionText(original);
@@ -405,10 +409,10 @@ function conflictReport(
     "## Diff",
     "",
     "```diff",
-    ...diffLines(remoteText, localText),
+    ...diffLines(remoteText, localText, deviceName),
     "```",
     "",
-    "## iPhone version",
+    `## ${deviceName} version`,
     "",
     "```markdown",
     localText,
@@ -423,9 +427,9 @@ function conflictReport(
   ].join("\n");
 }
 
-function deletedSideMarker(path: string, keptSide: ConflictStrategy): string {
-  const keptLabel = keptSide === "remote" ? "GitLab" : "iPhone";
-  const deletedLabel = keptSide === "remote" ? "iPhone" : "GitLab";
+function deletedSideMarker(path: string, keptSide: ConflictStrategy, deviceName: string): string {
+  const keptLabel = keptSide === "remote" ? "GitLab" : deviceName;
+  const deletedLabel = keptSide === "remote" ? deviceName : "GitLab";
   return [
     "# Sync conflict: deletion",
     "",
@@ -438,7 +442,7 @@ function deletedSideMarker(path: string, keptSide: ConflictStrategy): string {
   ].join("\n");
 }
 
-function diffLines(remoteText: string, localText: string): string[] {
+function diffLines(remoteText: string, localText: string, deviceName: string): string[] {
   const remoteLines = remoteText.split("\n");
   const localLines = localText.split("\n");
   const max = Math.max(remoteLines.length, localLines.length);
@@ -457,7 +461,7 @@ function diffLines(remoteText: string, localText: string): string[] {
       lines.push(`- GitLab: ${remoteLine}`);
     }
     if (localLine !== undefined) {
-      lines.push(`+ iPhone: ${localLine}`);
+      lines.push(`+ ${deviceName}: ${localLine}`);
     }
   }
 

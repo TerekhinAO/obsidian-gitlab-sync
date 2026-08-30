@@ -1,4 +1,5 @@
-import { normalizePath, type App, type Plugin, type Vault } from "obsidian";
+import { normalizePath, Platform, type App, type Plugin, type Vault } from "obsidian";
+import { commitDeviceLabel, deviceLabel, type DevicePlatform } from "../device-label";
 import { GitLabClient } from "../gitlab/client";
 import type {
   CreatedGitLabCommit,
@@ -146,6 +147,8 @@ export interface SyncManagerOptions {
   nowDate?: () => Date;
   notice?: (message: string) => void;
   createProgressNotice?: (message: string) => ProgressNotice;
+  /** Overrides Obsidian's `Platform` so device naming can be exercised in tests. */
+  platform?: DevicePlatform;
 }
 
 const MAX_PLAN_ATTEMPTS = 2;
@@ -447,7 +450,7 @@ export class SyncManager {
 
       this.setProgress(input.progress, "Creating GitLab commit…");
       const createdCommit = await input.client.createCommit({
-        message: this.commitMessage(input.trigger),
+        message: this.commitMessage(input.trigger, input.settings),
         actions: plan.actions,
       });
       const finalizedPlan = await this.planForActualCreatedCommit(
@@ -719,7 +722,7 @@ export class SyncManager {
     return this.options.createPlanner?.(client, settings) ?? new SyncPlanner({
       getRemoteVersion: async (path, remoteSha) =>
         versionFromArrayBuffer(await client.getRawFile(path, remoteSha)),
-      deviceName: "iPhone",
+      deviceName: deviceLabel(settings.authorName, this.platform()),
       conflictStrategy: settings.conflictStrategy,
     });
   }
@@ -830,17 +833,16 @@ export class SyncManager {
     return visibleFiles.sort();
   }
 
-  private commitMessage(trigger: SyncTrigger): string {
-    if (trigger === "audit") {
-      return "Sync vault from iPhone audit";
+  private commitMessage(trigger: SyncTrigger, settings: GitLabSyncSettings): string {
+    const label = commitDeviceLabel(settings.authorName, this.platform());
+    if (trigger === "audit" || trigger === "foreground" || trigger === "background") {
+      return `Sync vault from ${label} ${trigger}`;
     }
-    if (trigger === "foreground") {
-      return "Sync vault from iPhone foreground";
-    }
-    if (trigger === "background") {
-      return "Sync vault from iPhone background";
-    }
-    return "Sync vault from iPhone";
+    return `Sync vault from ${label}`;
+  }
+
+  private platform(): DevicePlatform {
+    return this.options.platform ?? Platform;
   }
 
   private setProgress(progress: ProgressNotice | undefined, message: string): void {

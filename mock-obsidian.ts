@@ -360,6 +360,22 @@ export async function requestUrl(options: RequestUrlParam) {
 }
 
 // Mock utility functions
+/**
+ * Node has no Obsidian host, so every platform flag is false. Tests that care
+ * about device naming inject their own flags instead of leaning on this.
+ */
+export const Platform = {
+  isDesktop: false,
+  isMobile: false,
+  isIosApp: false,
+  isAndroidApp: false,
+  isPhone: false,
+  isTablet: false,
+  isMacOS: false,
+  isWin: false,
+  isLinux: false,
+};
+
 export function normalizePath(path: string): string {
   return path.replace(/\\/g, "/");
 }

@@ -279,6 +279,7 @@ describe("ConflictResolver", () => {
         remote: { [testCase.path]: testCase.remote },
         trackedFiles: {},
         now,
+        deviceName: "iPhone",
       }),
     ).resolves.toEqual({
       commitActions: testCase.wantActions,
@@ -297,6 +298,7 @@ describe("ConflictResolver", () => {
       remote: { "asset.bin": { exists: true, bytes: invalidUtf8B } },
       trackedFiles: {},
       now,
+      deviceName: "iPhone",
     });
 
     expect(plan.commitActions).toEqual([{
@@ -318,6 +320,7 @@ describe("ConflictResolver", () => {
       remote: { "note.md": present("remote line") },
       trackedFiles: {},
       now,
+      deviceName: "iPhone",
     });
 
     const conflictBase64 = actionContent(plan.commitActions[0]);
@@ -338,12 +341,52 @@ describe("ConflictResolver", () => {
     expect(conflictContent).toContain("+ iPhone: local line");
   });
 
+  it("labels the conflict copy and its report with the device name it was given", async () => {
+    const plan = await new ConflictResolver().resolve({
+      snapshots: [snapshot("note.md", present("local line"), present("base line"))],
+      remote: { "note.md": present("remote line") },
+      trackedFiles: {},
+      now,
+      deviceName: "macbook-work",
+    });
+
+    const conflictContent = decodeBase64(actionContent(plan.commitActions[0]));
+
+    expect(plan.commitActions[0]).toMatchObject({
+      file_path: `note — conflict macbook-work ${conflictStamp}.md`,
+    });
+    expect(conflictContent).toContain("Conflict copy contains: macbook-work");
+    expect(conflictContent).toContain("## macbook-work version");
+    expect(conflictContent).toContain("+ macbook-work: local line");
+    expect(conflictContent).not.toContain("iPhone");
+  });
+
+  it("labels the deletion marker with the device name it was given", async () => {
+    const plan = await new ConflictResolver().resolve({
+      snapshots: [snapshot("note.md", missing(), present("base line"))],
+      remote: { "note.md": present("remote line") },
+      trackedFiles: {},
+      now,
+      deviceName: "macbook-work",
+    });
+
+    const markerContent = decodeBase64(actionContent(plan.commitActions[0]));
+
+    expect(plan.commitActions[0]).toMatchObject({
+      file_path: `note — deletion conflict macbook-work ${conflictStamp}.md`,
+    });
+    expect(markerContent).toContain("# Sync conflict: deletion on macbook-work");
+    expect(markerContent).toContain("was deleted on macbook-work");
+    expect(markerContent).not.toContain("iPhone");
+  });
+
   it("can keep the local version at the original path and write the remote version to the conflict report", async () => {
     const plan = await new ConflictResolver({ strategy: "local" }).resolve({
       snapshots: [snapshot("note.md", present("local line"), present("base line"))],
       remote: { "note.md": present("remote line") },
       trackedFiles: {},
       now,
+      deviceName: "iPhone",
     });
 
     const conflictBase64 = actionContent(plan.commitActions[1]);
@@ -378,6 +421,7 @@ describe("ConflictResolver", () => {
       },
       trackedFiles: {},
       now,
+      deviceName: "iPhone",
     });
     const merged = ["# Title", "remote edit", "local edit", "end"].join("\n");
 
@@ -406,6 +450,7 @@ describe("ConflictResolver", () => {
       remote: { "note.md": present("remote line") },
       trackedFiles: {},
       now,
+      deviceName: "iPhone",
     });
 
     expect(plan.materializeOperations[0]).toEqual({
@@ -422,6 +467,7 @@ describe("ConflictResolver", () => {
       remote: { "note.md": present("remote line") },
       trackedFiles: {},
       now,
+      deviceName: "iPhone",
     });
 
     expect(plan.commitActions[0]).toEqual({
@@ -440,6 +486,7 @@ describe("ConflictResolver", () => {
       remote: { "image.jpg": missing() },
       trackedFiles: {},
       now,
+      deviceName: "iPhone",
     });
 
     expect(plan.commitActions).toEqual([{
@@ -468,6 +515,7 @@ describe("ConflictResolver", () => {
         [`README — conflict iPhone ${conflictStamp}-2`]: tracked("occupied"),
       },
       now,
+      deviceName: "iPhone",
     });
 
     expect(plan.conflictPaths).toEqual([`README — conflict iPhone ${conflictStamp}-3`]);

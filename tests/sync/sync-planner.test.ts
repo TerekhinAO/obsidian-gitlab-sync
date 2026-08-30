@@ -286,6 +286,7 @@ function plannerWithRemote(
   lastCommitIds: Record<string, string> = {},
 ): SyncPlanner {
   return new SyncPlanner({
+    deviceName: "iPhone",
     getRemoteVersion: async (path: string) => remote[path] ?? missing(),
     getLastCommitId: async (path: string) => lastCommitIds[path] ?? null,
   });

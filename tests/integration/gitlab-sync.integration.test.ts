@@ -19,6 +19,8 @@ vi.mock("obsidian", () => ({
   requestUrl: requestUrlMock,
   normalizePath: (path: string) =>
     path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, ""),
+  // A desktop host, so device labels resolve to "Mac" when no author is set.
+  Platform: { isMacOS: true },
 }));
 
 describe("GitLab sync integration", () => {
@@ -139,11 +141,11 @@ describe("GitLab sync integration", () => {
     expect(setup.server.fileText("unicode/Привет 😀.md")).toBe("unicode local");
 
     const paths = setup.server.paths();
-    expect(paths).toContain(`conflict — conflict iPhone ${conflictStamp}.md`);
-    expect(paths).toContain(`binary — conflict iPhone ${conflictStamp}.bin`);
-    expect(paths).toContain(`local-delete-remote-update — deletion conflict iPhone ${conflictStamp}.md`);
-    expect(paths).toContain(`remote-delete-local-update — conflict iPhone ${conflictStamp}.md`);
-    expect(paths).toContain(`rename-old — conflict iPhone ${conflictStamp}.md`);
+    expect(paths).toContain(`conflict — conflict Mobile User ${conflictStamp}.md`);
+    expect(paths).toContain(`binary — conflict Mobile User ${conflictStamp}.bin`);
+    expect(paths).toContain(`local-delete-remote-update — deletion conflict Mobile User ${conflictStamp}.md`);
+    expect(paths).toContain(`remote-delete-local-update — conflict Mobile User ${conflictStamp}.md`);
+    expect(paths).toContain(`rename-old — conflict Mobile User ${conflictStamp}.md`);
     await expectNoMetadata(setup);
   });
 
@@ -337,6 +339,7 @@ class MemoryVault {
       readBinary: async (path: string) => this.readBinary(path),
       writeBinary: async (path: string, data: ArrayBuffer) => this.write(path, new Uint8Array(data)),
       remove: async (path: string) => this.remove(path),
+      rmdir: async (path: string, recursive: boolean) => this.rmdir(path, recursive),
       rename: async (path: string, newPath: string) => this.rename(path, newPath),
     },
   };
@@ -373,6 +376,10 @@ class MemoryVault {
 
   async remove(path: string): Promise<void> {
     this.files.delete(path);
+  }
+
+  private async rmdir(path: string, _recursive: boolean): Promise<void> {
+    this.folders.delete(path);
   }
 
   private async rename(path: string, newPath: string): Promise<void> {

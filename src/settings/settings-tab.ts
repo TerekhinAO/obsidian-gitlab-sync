@@ -127,6 +127,9 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Author name")
+      .setDesc(
+        "Also names this device in commit messages and conflict copies. Leave empty to use the detected platform.",
+      )
       .addText((text) =>
         text.setValue(this.plugin.settings.authorName).onChange(async (value) => {
           this.plugin.settings.authorName = value;
