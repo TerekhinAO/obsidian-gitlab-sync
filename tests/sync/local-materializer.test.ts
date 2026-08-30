@@ -94,8 +94,13 @@ function fakeVault(initialFiles: Record<string, Uint8Array> = {}) {
         folders: [...folders].filter((path) => path !== "" && parent(path) === dir),
       };
     }),
-    rmdir: vi.fn(async (dir: string, _recursive: boolean) => {
+    rmdir: vi.fn(async (dir: string, recursive: boolean) => {
       calls.push(["rmdir", dir]);
+      if (!recursive) {
+        // Obsidian forwards the flag straight to fs.rm, which rejects any
+        // directory when recursive is false — even an empty one.
+        throw new Error(`Path is a directory: rm returned EISDIR (is a directory) ${dir}`);
+      }
       folders.delete(dir);
     }),
   };
@@ -226,8 +231,8 @@ describe("LocalMaterializer", () => {
 
     expect(fixture.folderExists("notes/deep")).toBe(false);
     expect(fixture.folderExists("notes")).toBe(false);
-    expect(fixture.vault.adapter.rmdir).toHaveBeenCalledWith("notes/deep", false);
-    expect(fixture.vault.adapter.rmdir).toHaveBeenCalledWith("notes", false);
+    expect(fixture.vault.adapter.rmdir).toHaveBeenCalledWith("notes/deep", true);
+    expect(fixture.vault.adapter.rmdir).toHaveBeenCalledWith("notes", true);
   });
 
   it("keeps a parent folder that still holds a sibling file", async () => {

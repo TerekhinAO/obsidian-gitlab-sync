@@ -144,9 +144,11 @@ export class LocalMaterializer {
         if (listed.files.length > 0 || listed.folders.length > 0) {
           continue;
         }
-        // Non-recursive: the adapter refuses if anything `list` did not report
-        // is still inside, which keeps an unexpected hidden file from being lost.
-        await this.options.vault.adapter.rmdir(directory, false);
+        // Recursive, because the adapter forwards the flag to `fs.rm`, which
+        // rejects every directory with EISDIR when it is false. The `list`
+        // check above is what makes this safe, and it does report hidden
+        // entries, so nothing can be sitting here unseen.
+        await this.options.vault.adapter.rmdir(directory, true);
       } catch (error) {
         // Best effort. The commit already landed remotely, so a failed cleanup
         // must never abort materialization.

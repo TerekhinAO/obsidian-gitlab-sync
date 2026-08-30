@@ -378,7 +378,10 @@ class MemoryVault {
     this.files.delete(path);
   }
 
-  private async rmdir(path: string, _recursive: boolean): Promise<void> {
+  private async rmdir(path: string, recursive: boolean): Promise<void> {
+    if (!recursive) {
+      throw new Error(`Path is a directory: rm returned EISDIR (is a directory) ${path}`);
+    }
     this.folders.delete(path);
   }
 
