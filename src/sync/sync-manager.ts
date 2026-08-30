@@ -753,6 +753,7 @@ export class SyncManager {
         vault: this.options.vault,
         stateStore: this.options.stateStore as StateStore,
         journal: this.getJournal(),
+        logger: this.options.logger,
       });
     }
     return this.materializer;

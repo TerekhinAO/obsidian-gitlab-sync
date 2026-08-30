@@ -49,6 +49,16 @@ function fakeVault(initialFiles: Record<string, Uint8Array> = {}) {
     return slash === -1 ? "" : path.slice(0, slash);
   };
 
+  const addAncestors = (path: string) => {
+    for (let dir = parent(path); dir !== ""; dir = parent(dir)) {
+      folders.add(dir);
+    }
+  };
+
+  for (const path of files.keys()) {
+    addAncestors(path);
+  }
+
   const adapter = {
     exists: vi.fn(async (path: string) => files.has(path) || folders.has(path)),
     mkdir: vi.fn(async (path: string) => {
@@ -74,6 +84,20 @@ function fakeVault(initialFiles: Record<string, Uint8Array> = {}) {
       folders.add(parent(newPath));
       files.set(newPath, value);
     }),
+    list: vi.fn(async (dir: string) => {
+      calls.push(["list", dir]);
+      if (!folders.has(dir)) {
+        throw new Error(`ENOENT: ${dir}`);
+      }
+      return {
+        files: [...files.keys()].filter((path) => parent(path) === dir),
+        folders: [...folders].filter((path) => path !== "" && parent(path) === dir),
+      };
+    }),
+    rmdir: vi.fn(async (dir: string, _recursive: boolean) => {
+      calls.push(["rmdir", dir]);
+      folders.delete(dir);
+    }),
   };
 
   return {
@@ -83,6 +107,9 @@ function fakeVault(initialFiles: Record<string, Uint8Array> = {}) {
     },
     exists(path: string) {
       return files.has(path);
+    },
+    folderExists(path: string) {
+      return folders.has(path);
     },
     calls,
   };
@@ -188,6 +215,105 @@ describe("LocalMaterializer", () => {
     ])).rejects.toThrow("Cannot materialize hard-excluded path");
 
     expect(fixture.read(".obsidian/plugins/gitlab-gitless-sync/main.js")).toEqual(bytes("runtime"));
+  });
+
+  it("removes parent folders left empty by a delete", async () => {
+    const fixture = materializer({
+      initialFiles: { "notes/deep/note.md": bytes("gone") },
+    });
+
+    await fixture.materializer.apply([{ type: "delete", path: "notes/deep/note.md" }]);
+
+    expect(fixture.folderExists("notes/deep")).toBe(false);
+    expect(fixture.folderExists("notes")).toBe(false);
+    expect(fixture.vault.adapter.rmdir).toHaveBeenCalledWith("notes/deep", false);
+    expect(fixture.vault.adapter.rmdir).toHaveBeenCalledWith("notes", false);
+  });
+
+  it("keeps a parent folder that still holds a sibling file", async () => {
+    const fixture = materializer({
+      initialFiles: {
+        "notes/gone.md": bytes("gone"),
+        "notes/kept.md": bytes("kept"),
+      },
+    });
+
+    await fixture.materializer.apply([{ type: "delete", path: "notes/gone.md" }]);
+
+    expect(fixture.folderExists("notes")).toBe(true);
+    expect(fixture.vault.adapter.rmdir).not.toHaveBeenCalled();
+  });
+
+  it("keeps a parent folder that still holds a sibling folder", async () => {
+    const fixture = materializer({
+      initialFiles: {
+        "notes/gone/note.md": bytes("gone"),
+        "notes/kept/note.md": bytes("kept"),
+      },
+    });
+
+    await fixture.materializer.apply([{ type: "delete", path: "notes/gone/note.md" }]);
+
+    expect(fixture.folderExists("notes/gone")).toBe(false);
+    expect(fixture.folderExists("notes")).toBe(true);
+    expect(fixture.vault.adapter.rmdir).toHaveBeenCalledTimes(1);
+  });
+
+  it("inspects a shared parent folder once for several deletes", async () => {
+    const fixture = materializer({
+      initialFiles: {
+        "notes/one.md": bytes("one"),
+        "notes/two.md": bytes("two"),
+        "notes/three.md": bytes("three"),
+      },
+    });
+
+    await fixture.materializer.apply([
+      { type: "delete", path: "notes/one.md" },
+      { type: "delete", path: "notes/two.md" },
+      { type: "delete", path: "notes/three.md" },
+    ]);
+
+    const listedFolders = fixture.calls.filter(([name]) => name === "list").map(([, path]) => path);
+    expect(listedFolders).toEqual(["notes"]);
+    expect(fixture.folderExists("notes")).toBe(false);
+  });
+
+  it("never removes the Obsidian config directory", async () => {
+    const fixture = materializer({
+      initialFiles: { ".obsidian/snippets/theme.css": bytes("css") },
+    });
+
+    await fixture.materializer.apply([{ type: "delete", path: ".obsidian/snippets/theme.css" }]);
+
+    expect(fixture.folderExists(".obsidian/snippets")).toBe(false);
+    expect(fixture.folderExists(".obsidian")).toBe(true);
+    expect(fixture.vault.adapter.rmdir).not.toHaveBeenCalledWith(".obsidian", expect.anything());
+  });
+
+  it("does not inspect the vault root when a root-level file is deleted", async () => {
+    const fixture = materializer({
+      initialFiles: { "note.md": bytes("gone") },
+    });
+
+    await fixture.materializer.apply([{ type: "delete", path: "note.md" }]);
+
+    expect(fixture.exists("note.md")).toBe(false);
+    expect(fixture.vault.adapter.list).not.toHaveBeenCalled();
+    expect(fixture.vault.adapter.rmdir).not.toHaveBeenCalled();
+  });
+
+  it("completes the delete even when pruning an empty folder fails", async () => {
+    const fixture = materializer({
+      initialFiles: { "notes/note.md": bytes("gone") },
+    });
+    fixture.vault.adapter.rmdir.mockRejectedValueOnce(new Error("ENOTEMPTY"));
+
+    await expect(fixture.materializer.apply([
+      { type: "delete", path: "notes/note.md" },
+    ])).resolves.toBeUndefined();
+
+    expect(fixture.exists("notes/note.md")).toBe(false);
   });
 
   it("falls back to direct binary write when sibling rename is unavailable", async () => {

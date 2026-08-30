@@ -1,4 +1,5 @@
 import { normalizePath } from "obsidian";
+import type Logger from "../logger";
 import type { StateStore } from "./state-store";
 import type { MaterializeOperation } from "./types";
 
@@ -9,6 +10,8 @@ interface MaterializerVault {
     mkdir(path: string): Promise<void>;
     writeBinary(path: string, data: ArrayBuffer): Promise<void>;
     remove(path: string): Promise<void>;
+    list(path: string): Promise<{ files: string[]; folders: string[] }>;
+    rmdir(path: string, recursive: boolean): Promise<void>;
     rename?(path: string, newPath: string): Promise<void>;
   };
 }
@@ -23,6 +26,7 @@ export interface LocalMaterializerOptions {
   journal: MaterializerJournal;
   pluginId?: string;
   now?: () => number;
+  logger?: Pick<Logger, "warn">;
 }
 
 export class LocalMaterializer {
@@ -44,6 +48,7 @@ export class LocalMaterializer {
           await this.delete(operation.path);
         }
       }
+      await this.pruneEmptyParents(operations);
     });
   }
 
@@ -107,6 +112,60 @@ export class LocalMaterializer {
     await this.options.vault.adapter.remove(normalized);
   }
 
+  /**
+   * Git cannot represent an empty directory, so a remote deletion that removes
+   * the last file in a folder would otherwise leave that folder behind forever.
+   * Only ancestors of just-deleted paths can have become empty, so the sweep
+   * stays proportional to the number of deletions instead of the vault size.
+   */
+  private async pruneEmptyParents(operations: MaterializeOperation[]): Promise<void> {
+    const candidates = new Set<string>();
+    for (const operation of operations) {
+      if (operation.type !== "delete") {
+        continue;
+      }
+      for (
+        let directory = parentPath(normalizePath(operation.path));
+        directory !== "";
+        directory = parentPath(directory)
+      ) {
+        candidates.add(directory);
+      }
+    }
+
+    // Deepest first, so `a/b/c` is gone by the time `a/b` is inspected.
+    const ordered = [...candidates].sort((left, right) => depth(right) - depth(left));
+    for (const directory of ordered) {
+      if (this.isPruneProtected(directory)) {
+        continue;
+      }
+      try {
+        const listed = await this.options.vault.adapter.list(directory);
+        if (listed.files.length > 0 || listed.folders.length > 0) {
+          continue;
+        }
+        // Non-recursive: the adapter refuses if anything `list` did not report
+        // is still inside, which keeps an unexpected hidden file from being lost.
+        await this.options.vault.adapter.rmdir(directory, false);
+      } catch (error) {
+        // Best effort. The commit already landed remotely, so a failed cleanup
+        // must never abort materialization.
+        await this.options.logger?.warn("Failed to prune empty folder", {
+          path: directory,
+          message: errorMessage(error),
+        });
+      }
+    }
+  }
+
+  private isPruneProtected(path: string): boolean {
+    if (this.isHardExcluded(path)) {
+      return true;
+    }
+    const configDir = normalizePath(this.options.vault.configDir);
+    return path === configDir || configDir.startsWith(`${path}/`);
+  }
+
   private async ensureParentFolders(path: string): Promise<void> {
     const parts = normalizePath(path).split("/");
     parts.pop();
@@ -153,6 +212,19 @@ export class LocalMaterializer {
     const fileName = slash === -1 ? normalized : normalized.slice(slash + 1);
     return `${directory}.${fileName}.gitlab-gitless-sync-${this.now().toString(36)}.tmp`;
   }
+}
+
+function parentPath(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash === -1 ? "" : path.slice(0, slash);
+}
+
+function depth(path: string): number {
+  return path.split("/").length;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function decodeBase64(contentBase64: string): ArrayBuffer {
