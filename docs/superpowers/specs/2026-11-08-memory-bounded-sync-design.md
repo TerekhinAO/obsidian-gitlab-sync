@@ -66,8 +66,16 @@ applier.
 ### 1. Streaming remote-only applier
 
 A new module, `src/sync/remote-only-stream.ts`, exports a `StreamingRemoteApplier` that owns
-remote-only materialization and index building. It is driven by the ordered list of remote
-changes **not** touched by any local snapshot, the base index, and the GitLab client.
+remote-only materialization and index building. It is driven by the ordered remote-change set,
+the base index, and the GitLab client.
+
+In the remote-only path the plan produces no commit action, so every local snapshot that touches
+a remote-changed path resolves to "materialize the remote version" — there are never snapshot
+commit/copy actions to stream. The applier therefore processes the **full** ordered remote-change
+set: a change not touched by a snapshot is written from its fetched bytes, and a snapshot-touched
+remote change reproduces the same remote-materialization by fetching and writing the remote
+version. This is why the applier's input can be a plain `RemoteChange[]` and why resume needs no
+separate conflict-pass state.
 
 It processes changes in bounded windows (`CHUNK_SIZE`, an internal constant, default `32`). For
 each chunk it:
@@ -165,9 +173,9 @@ syncLocked
   (new type `RemoteApply` in `src/sync/types.ts`).
 - `DEFAULT_STATE` gains `remoteApply: null`, `schemaVersion: 3`.
 - `StateStore.load()/save()` migrate schema 2 → 3 (default `remoteApply: null`).
-- `SyncPlanner` gains a streaming-aware remote-only mode that returns the ordered remote-only
-  change list and bounded snapshot/conflict handling without building `materializeWithoutCommit`
-  for the bulk. (`plan()` is retained for the commit path.)
+- `SyncPlanner` gains a streaming-aware remote-only mode that returns the ordered remote-change
+  set (`streamChanges`) and bounded snapshot/conflict handling without building
+  `materializeWithoutCommit` for the bulk. (`plan()` is retained for the commit path.)
 - `LocalMaterializer` gains a byte-direct write entry point.
 - New `StreamingRemoteApplier` (new file `src/sync/remote-only-stream.ts`).
 - `SyncManager` wires resume detection and the streaming applier into `syncLocked`/`planAndApply`.
