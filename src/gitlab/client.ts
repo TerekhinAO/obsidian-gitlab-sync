@@ -335,7 +335,6 @@ export class GitLabClient {
       await this.requestScheduler?.waitForTurn();
 
       let response: RequestUrlResponse;
-      let transportFailure: string | null = null;
       try {
         response = (await requestUrl({
           url,
@@ -346,17 +345,11 @@ export class GitLabClient {
           throw: false,
         })) as RequestUrlResponse;
       } catch (error) {
-        transportFailure =
-          `GitLab request failed before response for ${method} ${url}: ${errorMessage(error)}`;
-      }
-
-      if (transportFailure !== null) {
         // Only idempotent GETs are safe to re-issue after a transport error;
         // a POST timeout is indeterminate and must never auto-repeat.
-        if (!isGet) {
-          throw new GitLabTransportError(transportFailure);
-        }
-        if (attempt >= this.maxGetRetries) {
+        const transportFailure =
+          `GitLab request failed before response for ${method} ${url}: ${errorMessage(error)}`;
+        if (!isGet || attempt >= this.maxGetRetries) {
           throw new GitLabTransportError(transportFailure);
         }
         const delayMs = 1_000 * 2 ** attempt;
@@ -380,17 +373,19 @@ export class GitLabClient {
       }
 
       if (isGet && response.status === 429) {
-        if (attempt >= this.maxGetRetries) {
-          throw this.toError(response, method, url);
-        }
         const retryAfterSeconds = this.parseRetryAfter(response.headers);
         const delayMs =
           retryAfterSeconds && retryAfterSeconds > 0
             ? retryAfterSeconds * 1_000
             : this.defaultRateLimitDelayMs;
         const retryAt = this.now() + delayMs;
+        // Persist the backoff before throwing so an exhausted retry budget still
+        // leaves a future backoff window instead of letting the next sync burst.
         await this.requestScheduler?.blockUntil(retryAt);
         await this.onBackoff?.({ reason: "rate-limit", method, path, attempt, delayMs, retryAt });
+        if (attempt >= this.maxGetRetries) {
+          throw this.toError(response, method, url);
+        }
         await this.sleep(delayMs);
         attempt += 1;
         continue;

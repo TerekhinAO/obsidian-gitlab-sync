@@ -374,8 +374,9 @@ describe("GitLab sync integration", () => {
     const requestsAfterExhaustion = setup.server.requests.length;
     expect(requestsAfterExhaustion).toBeGreaterThanOrEqual(6);
 
-    // Simulate an app reload before the backoff window elapses.
-    fakeNow = 0;
+    // The final 429 persists a backoff that is still in the future, so a trigger
+    // immediately after the exhausted sync is deferred and makes no network calls.
+    expect(fakeNow).toBeLessThan(persisted.remoteBackoffUntil!);
     await manager.sync("foreground");
     await manager.sync("background");
     expect(setup.server.requests.length).toBe(requestsAfterExhaustion);

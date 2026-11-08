@@ -134,7 +134,7 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
 
     const result = await this.syncManager.sync(trigger);
     this.pluginData = await this.stateStore.load();
-    if (result.status === "deferred") {
+    if (result.status === "deferred" && result.retryAt !== undefined) {
       const waitSeconds = Math.max(1, Math.ceil((result.retryAt - Date.now()) / 1000));
       new Notice(`Sync delayed ${waitSeconds}s until GitLab rate limit clears`);
     }

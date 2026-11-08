@@ -4,6 +4,7 @@ import type { GitLabBranch, GitLabCommitAction, CreatedGitLabCommit } from "../.
 import type { DirtyEntry, GitLabSyncSettings, LocalSyncState, MaterializeOperation, PendingTransaction, PluginData, TrackedFile } from "../../src/sync/types";
 import type { RemoteChange } from "../../src/sync/remote-diff";
 import type { SyncPlan } from "../../src/sync/sync-planner";
+import type { PlannerLike } from "../../src/sync/sync-manager";
 import type { VersionState } from "../../src/sync/local-snapshot";
 import type { DevicePlatform } from "../../src/device-label";
 
@@ -444,7 +445,7 @@ function managerFixture(options: {
     client: unknown,
     settings: unknown,
     getRemoteVersion: (path: string, remoteSha: string) => Promise<VersionState>,
-  ) => unknown;
+  ) => PlannerLike;
 }) {
   const data = options.settings
     ? { ...options.data, settings: options.settings }

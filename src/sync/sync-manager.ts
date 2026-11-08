@@ -94,7 +94,7 @@ interface LocalSnapshotLike {
   ): Promise<LocalSnapshotEntry[]>;
 }
 
-interface PlannerLike {
+export interface PlannerLike {
   plan(input: {
     baseSha: string;
     remoteSha: string;

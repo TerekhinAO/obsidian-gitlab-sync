@@ -87,4 +87,38 @@ describe("GitLabRequestScheduler", () => {
 
     expect(order).toEqual([1, 2, 3]);
   });
+
+  it("honors a backoff that arrives while a caller is already waiting", async () => {
+    let now = 0;
+    const pendingSleeps: Array<() => void> = [];
+    const scheduler = new GitLabRequestScheduler({
+      now: () => now,
+      sleep: (milliseconds: number) =>
+        new Promise<void>((resolve) => {
+          pendingSleeps.push(() => {
+            now += milliseconds;
+            resolve();
+          });
+        }),
+    });
+
+    // Prime the first slot so the second caller actually has to wait.
+    await scheduler.waitForTurn();
+    const second = scheduler.waitForTurn();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(pendingSleeps.length).toBe(1);
+
+    // A server backoff arrives while the second caller is mid-sleep.
+    scheduler.blockUntil(60_000);
+
+    // The first sleep resolves (the old 750ms deadline), but the caller must
+    // re-wait for the backoff instead of starting early.
+    pendingSleeps[0]();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(pendingSleeps.length).toBe(2);
+
+    pendingSleeps[1]();
+    await second;
+    expect(now).toBe(60_000);
+  });
 });
