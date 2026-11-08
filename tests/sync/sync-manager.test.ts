@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { SyncManager } from "../../src/sync/sync-manager";
 import type { GitLabBranch, GitLabCommitAction, CreatedGitLabCommit } from "../../src/gitlab/types";
-import type { DirtyEntry, GitLabSyncSettings, LocalSyncState, MaterializeOperation, PendingTransaction, PluginData, TrackedFile } from "../../src/sync/types";
+import type { DirtyEntry, GitLabSyncSettings, LocalSyncState, PendingTransaction, PluginData, TrackedFile } from "../../src/sync/types";
 import type { RemoteChange } from "../../src/sync/remote-diff";
 import type { SyncPlan } from "../../src/sync/sync-planner";
 import type { PlannerLike } from "../../src/sync/sync-manager";
@@ -169,7 +169,7 @@ describe("SyncManager", () => {
       remoteChanges: [{ type: "update", path: "desktop.md" }],
     });
     fixture.planner.plan.mockResolvedValueOnce(remoteOnlyPlan("remote-a", [
-      { type: "write", path: "desktop.md", contentBase64: base64("desktop") },
+      { type: "update", path: "desktop.md" },
     ]));
 
     await expect(fixture.manager.sync("startup")).resolves.toMatchObject({
@@ -178,15 +178,89 @@ describe("SyncManager", () => {
     });
 
     expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
-    expect(fixture.materializer.apply).toHaveBeenCalledWith([
-      { type: "write", path: "desktop.md", contentBase64: base64("desktop") },
-    ]);
+    expect(fixture.streamingApplier.applyStream).toHaveBeenCalledTimes(1);
+    const call = fixture.streamingApplier.applyStream.mock.calls[0][0];
+    expect(call.changes).toEqual([{ type: "update", path: "desktop.md" }]);
     expect((await fixture.store.load()).state).toMatchObject({
       lastSyncedCommitSha: "remote-a",
-      trackedFiles: { "desktop.md": tracked("desktop") },
+      trackedFiles: { "desktop.md": tracked("stream") },
       pendingTransaction: null,
       lastSyncResult: "success",
     });
+  });
+
+  it("streams a remote-only plan and persists resume progress between chunks", async () => {
+    const fixture = managerFixture({
+      data: initializedData(),
+      remoteChanges: [{ type: "update", path: "desktop.md" }],
+    });
+    fixture.planner.plan.mockResolvedValueOnce(
+      remoteOnlyPlan("remote-a", [{ type: "update", path: "desktop.md" }]),
+    );
+
+    await expect(fixture.manager.sync("startup")).resolves.toMatchObject({
+      status: "success",
+      commitSha: "remote-a",
+    });
+
+    expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
+    expect(fixture.streamingApplier.applyStream).toHaveBeenCalledTimes(1);
+    const call = fixture.streamingApplier.applyStream.mock.calls[0][0];
+    expect(call.changes).toEqual([{ type: "update", path: "desktop.md" }]);
+    expect(call.remoteSha).toBe("remote-a");
+    // Resume state was persisted and then cleared on finalize.
+    const state = (await fixture.store.load()).state;
+    expect(state.remoteApply).toBeNull();
+    expect(state.lastSyncedCommitSha).toBe("remote-a");
+    expect(state.trackedFiles).toEqual({ "desktop.md": tracked("stream") });
+  });
+
+  it("resumes an interrupted remote-only apply when the remote head matches", async () => {
+    const fixture = managerFixture({
+      data: initializedData({
+        remoteApply: {
+          remoteSha: "remote-a",
+          remainingChanges: [{ type: "update", path: "resume.md" }],
+          nextTrackedFiles: {},
+        },
+      }),
+      branchHeads: ["remote-a"],
+    });
+
+    await expect(fixture.manager.sync("manual")).resolves.toMatchObject({
+      status: "success",
+      commitSha: "remote-a",
+    });
+
+    expect(fixture.planner.plan).not.toHaveBeenCalled();
+    expect(fixture.streamingApplier.applyStream).toHaveBeenCalledTimes(1);
+    const call = fixture.streamingApplier.applyStream.mock.calls[0][0];
+    expect(call.changes).toEqual([{ type: "update", path: "resume.md" }]);
+    expect(call.baseIndex).toEqual({});
+    const state = (await fixture.store.load()).state;
+    expect(state.remoteApply).toBeNull();
+    expect(state.lastSyncedCommitSha).toBe("remote-a");
+  });
+
+  it("discards a stale resume point when the remote head moved", async () => {
+    const fixture = managerFixture({
+      data: initializedData({
+        remoteApply: {
+          remoteSha: "remote-a",
+          remainingChanges: [{ type: "update", path: "resume.md" }],
+          nextTrackedFiles: {},
+        },
+      }),
+      branchHeads: ["remote-b"],
+    });
+    fixture.planner.plan.mockResolvedValueOnce(remoteOnlyPlan("remote-b", []));
+
+    await fixture.manager.sync("manual");
+
+    expect(fixture.planner.plan).toHaveBeenCalledTimes(1);
+    const state = (await fixture.store.load()).state;
+    expect(state.remoteApply).toBeNull();
+    expect(state.lastSyncedCommitSha).toBe("remote-b");
   });
 
   it("recomputes once when the branch head changes before commit", async () => {
@@ -489,6 +563,28 @@ function managerFixture(options: {
     apply: vi.fn(async () => {
       events.push("apply");
     }),
+    applyBytes: vi.fn(async () => undefined),
+  };
+  const streamingApplier = {
+    applyStream: vi.fn(async ({ changes, remoteSha, baseIndex }: {
+      changes: RemoteChange[];
+      remoteSha: string;
+      baseIndex: Record<string, TrackedFile>;
+      onProgress?: (p: unknown) => Promise<void>;
+    }) => {
+      const index = { ...baseIndex };
+      for (const change of changes) {
+        if (change.type === "rename") {
+          delete index[change.oldPath];
+          index[change.newPath] = tracked("stream");
+        } else if (change.type === "delete") {
+          delete index[change.path];
+        } else {
+          index[change.path] = tracked("stream");
+        }
+      }
+      return index;
+    }),
   };
   const branchHeads = [...(options.branchHeads ?? ["remote-a", "remote-a"])];
   const gitlab = {
@@ -534,6 +630,7 @@ function managerFixture(options: {
     ignoreMatcher,
     localSnapshot,
     planner,
+    streamingApplier,
     manager: new SyncManager({
       stateStore: store,
       getToken: async () => options.token ?? "secret-token",
@@ -542,6 +639,7 @@ function managerFixture(options: {
       createIgnoreMatcher: () => ignoreMatcher,
       createLocalSnapshotService: () => localSnapshot,
       createPlanner: options.createPlanner ?? (() => planner),
+      createStreamingApplier: () => streamingApplier,
       materializer,
       journal,
       vault: fakeVault(options.localFiles ?? {}),
@@ -610,7 +708,7 @@ function pluginData(state: Partial<LocalSyncState>): PluginData {
   return {
     settings,
     state: {
-      schemaVersion: 2,
+      schemaVersion: 3,
       initialized: false,
       lastSyncedCommitSha: null,
       trackedFiles: {},
@@ -620,6 +718,7 @@ function pluginData(state: Partial<LocalSyncState>): PluginData {
       lastSyncResult: "never",
       remoteBackoffUntil: null,
       remoteBackoffReason: null,
+      remoteApply: null,
       ...state,
     },
   };
@@ -644,19 +743,18 @@ function localCommitPlan(remoteSha: string, path: string): SyncPlan {
   };
 }
 
-function remoteOnlyPlan(remoteSha: string, operations: MaterializeOperation[]): SyncPlan {
+function remoteOnlyPlan(remoteSha: string, streamChanges: RemoteChange[]): SyncPlan {
   return {
     basedOnRemoteSha: remoteSha,
     actions: [],
     materializeAfterCommit: [],
-    materializeWithoutCommit: operations,
-    nextTrackedFiles: operations.some((operation) => operation.type === "write")
-      ? Object.fromEntries(
-        operations
-          .filter((operation) => operation.type === "write")
-          .map((operation) => [operation.path, tracked("desktop")]),
-      )
-      : {},
+    materializeWithoutCommit: [],
+    streamChanges,
+    nextTrackedFiles: Object.fromEntries(
+      streamChanges
+        .filter((change) => change.type === "create" || change.type === "update")
+        .map((change) => [change.path, tracked("desktop")]),
+    ),
     acknowledgedDirtyPaths: [],
     conflictPaths: [],
   };

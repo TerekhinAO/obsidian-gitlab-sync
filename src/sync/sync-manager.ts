@@ -17,13 +17,16 @@ import { calculateGitBlobId, toBase64 } from "./conflict-resolver";
 import { RemoteDiffService, type RemoteChange, type RemoteDiffClient } from "./remote-diff";
 import { StateStore } from "./state-store";
 import { SyncPlanner, type SyncPlan } from "./sync-planner";
+import { StreamingRemoteApplier } from "./remote-only-stream";
 import type {
+  ByteMaterializeOperation,
   DirtyEntry,
   GitLabSyncSettings,
   LocalSyncState,
   MaterializeOperation,
   PendingTransaction,
   PluginData,
+  RemoteApply,
   TrackedFile,
 } from "./types";
 
@@ -103,6 +106,7 @@ export interface PlannerLike {
     remoteChanges: RemoteChange[];
     localSnapshots: LocalSnapshotEntry[];
     now: Date;
+    streamRemoteOnly?: boolean;
   }): Promise<SyncPlan>;
 }
 
@@ -117,6 +121,7 @@ interface JournalLike {
 
 interface MaterializerLike {
   apply(operations: MaterializeOperation[]): Promise<void>;
+  applyBytes(operations: ByteMaterializeOperation[]): Promise<void>;
   recoverPendingTransaction(): Promise<boolean>;
 }
 
@@ -150,6 +155,10 @@ export interface SyncManagerOptions {
   ) => PlannerLike;
   journal?: JournalLike;
   materializer?: MaterializerLike;
+  createStreamingApplier?: (
+    client: GitLabClientLike,
+    materializer: MaterializerLike,
+  ) => StreamingRemoteApplier;
   now?: () => number;
   nowDate?: () => Date;
   sleep?: (milliseconds: number) => Promise<void>;
@@ -392,6 +401,13 @@ export class SyncManager {
       const firstBranch = await client.getBranch();
       this.validateBranch(firstBranch);
 
+      if (trigger !== "audit") {
+        const resumable = this.resumableRemoteApply(data.state, firstBranch.commit.id);
+        if (resumable) {
+          return await this.resumeRemoteApply(trigger, firstBranch.commit.id, resumable, client, progress);
+        }
+      }
+
       if (trigger === "audit") {
         await this.auditLocalChanges();
       }
@@ -470,10 +486,11 @@ export class SyncManager {
         remoteChanges: remote.changes,
         localSnapshots,
         now: this.nowDate(),
+        streamRemoteOnly: true,
       });
 
       if (plan.actions.length === 0) {
-        return await this.applyRemoteOnlyPlan(input.trigger, remoteSha, plan, input.progress);
+        return await this.applyRemoteOnlyPlan(input.trigger, remoteSha, plan, input.client, input.progress);
       }
 
       const branchBeforeCommit = await input.client.getBranch();
@@ -563,15 +580,27 @@ export class SyncManager {
     trigger: SyncTrigger,
     remoteSha: string,
     plan: SyncPlan,
+    client: GitLabClientLike,
     progress?: ProgressNotice,
   ): Promise<SyncResult> {
     this.setProgress(progress, "Updating local vault…");
-    await this.getJournal().suppress(async () => {
-      await this.getMaterializer().apply(plan.materializeWithoutCommit);
+    const finalIndex = await this.getJournal().suppress(async () => {
+      const applier = this.getStreamingApplier(client);
+      return await applier.applyStream({
+        changes: plan.streamChanges,
+        remoteSha,
+        baseIndex: plan.nextTrackedFiles,
+        onProgress: async ({ remainingChanges, nextTrackedFiles }) => {
+          await this.options.stateStore.update((data) => {
+            data.state.remoteApply = { remoteSha, remainingChanges, nextTrackedFiles };
+          });
+        },
+      });
     });
+
     await this.options.stateStore.update((data) => {
       data.state.lastSyncedCommitSha = remoteSha;
-      data.state.trackedFiles = cloneTrackedFiles(plan.nextTrackedFiles);
+      data.state.trackedFiles = cloneTrackedFiles(finalIndex);
       for (const path of plan.acknowledgedDirtyPaths) {
         delete data.state.dirtyEntries[normalizePath(path)];
       }
@@ -580,10 +609,66 @@ export class SyncManager {
       data.state.lastSyncResult = plan.conflictPaths.length > 0 ? "conflict" : "success";
       data.state.remoteBackoffUntil = null;
       data.state.remoteBackoffReason = null;
+      data.state.remoteApply = null;
     });
+
     this.setProgress(progress, "Sync complete");
     return {
       status: plan.conflictPaths.length > 0 ? "conflict" : "success",
+      trigger,
+      message: "Sync complete",
+      commitSha: remoteSha,
+      attempts: 1,
+    };
+  }
+
+  private resumableRemoteApply(
+    state: LocalSyncState,
+    remoteSha: string,
+  ): RemoteApply | null {
+    const resume = state.remoteApply;
+    if (resume === null) {
+      return null;
+    }
+    return resume.remoteSha === remoteSha ? resume : null;
+  }
+
+  private async resumeRemoteApply(
+    trigger: SyncTrigger,
+    remoteSha: string,
+    resume: RemoteApply,
+    client: GitLabClientLike,
+    progress?: ProgressNotice,
+  ): Promise<SyncResult> {
+    this.setProgress(progress, "Updating local vault…");
+    const finalIndex = await this.getJournal().suppress(async () => {
+      const applier = this.getStreamingApplier(client);
+      return await applier.applyStream({
+        changes: resume.remainingChanges,
+        remoteSha,
+        baseIndex: resume.nextTrackedFiles,
+        onProgress: async ({ remainingChanges, nextTrackedFiles }) => {
+          await this.options.stateStore.update((data) => {
+            data.state.remoteApply = { remoteSha, remainingChanges, nextTrackedFiles };
+          });
+        },
+      });
+    });
+
+    await this.options.stateStore.update((data) => {
+      data.state.lastSyncedCommitSha = remoteSha;
+      data.state.trackedFiles = cloneTrackedFiles(finalIndex);
+      data.state.pendingTransaction = null;
+      data.state.lastSyncAt = this.now();
+      data.state.lastSyncResult = "success";
+      data.state.remoteBackoffUntil = null;
+      data.state.remoteBackoffReason = null;
+      data.state.remoteApply = null;
+    });
+
+    this.setProgress(progress, "Sync complete");
+    return {
+      status: "success",
       trigger,
       message: "Sync complete",
       commitSha: remoteSha,
@@ -815,6 +900,20 @@ export class SyncManager {
       });
     }
     return this.materializer;
+  }
+
+  private getStreamingApplier(
+    client: GitLabClientLike,
+  ): StreamingRemoteApplier {
+    return this.options.createStreamingApplier?.(
+      client,
+      this.getMaterializer(),
+    ) ?? new StreamingRemoteApplier({
+      client,
+      materializer: {
+        applyBytes: (operations) => this.getMaterializer().applyBytes(operations),
+      },
+    });
   }
 
   private async markError(): Promise<void> {
