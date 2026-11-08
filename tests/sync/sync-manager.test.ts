@@ -31,6 +31,63 @@ const settings: GitLabSyncSettings = {
 };
 
 describe("SyncManager", () => {
+  it("updates one progress handle through a successful sync and hides it once", async () => {
+    const messages: string[] = [];
+    let created = 0;
+    let hidden = 0;
+    const fixture = managerFixture({
+      data: initializedData(),
+      createProgressNotice: (message) => {
+        created += 1;
+        messages.push(message);
+        return {
+          setMessage: (next) => messages.push(next),
+          hide: () => {
+            hidden += 1;
+          },
+        };
+      },
+    });
+    fixture.planner.plan.mockResolvedValueOnce(remoteOnlyPlan("remote-a", []));
+
+    await expect(fixture.manager.sync("manual")).resolves.toMatchObject({ status: "success" });
+
+    expect(created).toBe(1);
+    expect(messages).toEqual([
+      "Checking GitLab…",
+      "Checking GitLab…",
+      "Finding remote changes…",
+      "Saving local changes…",
+      "Resolving conflicts…",
+      "Updating local vault…",
+      "Sync complete",
+    ]);
+    expect(hidden).toBe(1);
+  });
+
+  it("hides the progress handle once when sync fails", async () => {
+    let created = 0;
+    let hidden = 0;
+    const fixture = managerFixture({
+      data: initializedData(),
+      createProgressNotice: () => {
+        created += 1;
+        return {
+          setMessage: () => undefined,
+          hide: () => {
+            hidden += 1;
+          },
+        };
+      },
+    });
+    fixture.gitlab.getBranch.mockRejectedValueOnce(new Error("network down"));
+
+    await expect(fixture.manager.sync("manual")).resolves.toMatchObject({ status: "error" });
+
+    expect(created).toBe(1);
+    expect(hidden).toBe(1);
+  });
+
   it("returns a clear already-running result for concurrent sync calls", async () => {
     const fixture = managerFixture({
       data: initializedData({ dirtyEntries: { "note.md": dirty("note.md") } }),
@@ -552,6 +609,10 @@ function managerFixture(options: {
     settings: unknown,
     getRemoteVersion: (path: string, remoteSha: string) => Promise<VersionState>,
   ) => PlannerLike;
+  createProgressNotice?: (message: string) => {
+    setMessage(message: string): void;
+    hide(): void;
+  };
 }) {
   const data = options.settings
     ? { ...options.data, settings: options.settings }
@@ -677,6 +738,7 @@ function managerFixture(options: {
       now: () => 1234,
       nowDate: () => new Date("2026-07-26T20:15:00+03:00"),
       notice: (message) => notices.push(message),
+      createProgressNotice: options.createProgressNotice,
       platform: options.platform ?? { isMacOS: true },
     }),
     notices,

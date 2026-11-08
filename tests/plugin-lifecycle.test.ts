@@ -50,6 +50,7 @@ class TestPlugin extends GitLabGitlessSyncPlugin {
   public ribbonCalls: string[] = [];
   public settingTabs: any[] = [];
   public intervals: unknown[] = [];
+  public statusBarCalls = 0;
   public domEvents: { target: EventTarget; type: string; callback: EventListenerOrEventListenerObject }[] = [];
 
   constructor(data: any, app: any) {
@@ -80,6 +81,11 @@ class TestPlugin extends GitLabGitlessSyncPlugin {
     return { remove: vi.fn() } as any;
   }
 
+  addStatusBarItem() {
+    this.statusBarCalls += 1;
+    return { setText: vi.fn(), remove: vi.fn() } as any;
+  }
+
   registerInterval(interval: number) {
     this.intervals.push(interval);
     return interval;
@@ -95,6 +101,36 @@ class TestPlugin extends GitLabGitlessSyncPlugin {
 }
 
 describe("plugin lifecycle", () => {
+  it("shows live sync progress in one persistent Notice on every platform", async () => {
+    const messages: string[] = [];
+    const hiddenMessages: string[] = [];
+    const constructed: Array<{ message: string; timeout: number | undefined }> = [];
+    (globalThis as any).__noticeSpy = (message: string) => messages.push(message);
+    (globalThis as any).__noticeHideSpy = (message: string) => hiddenMessages.push(message);
+    (globalThis as any).__noticeConstructSpy = (message: string, timeout: number | undefined) => {
+      constructed.push({ message, timeout });
+    };
+    const plugin = new TestPlugin(fakePluginData(), fakeApp(() => undefined));
+
+    try {
+      await plugin.onload();
+      const createProgressNotice = (plugin.syncManager as any).options.createProgressNotice;
+      const progress = createProgressNotice("Checking GitLab…");
+      progress.setMessage("Updating local vault… 32/70");
+      progress.hide();
+
+      expect(messages).toEqual(["Checking GitLab…", "Updating local vault… 32/70"]);
+      expect(hiddenMessages).toEqual(["Updating local vault… 32/70"]);
+      expect(constructed).toEqual([{ message: "Checking GitLab…", timeout: 0 }]);
+      expect(plugin.statusBarCalls).toBe(0);
+    } finally {
+      delete (globalThis as any).__noticeSpy;
+      delete (globalThis as any).__noticeHideSpy;
+      delete (globalThis as any).__noticeConstructSpy;
+      vi.restoreAllMocks();
+    }
+  });
+
   it("runs pending recovery before startup sync", async () => {
     let layoutCallback!: () => Promise<void>;
     const plugin = new TestPlugin(fakePluginData(), fakeApp((callback) => {

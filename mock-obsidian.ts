@@ -103,7 +103,14 @@ export class Vault {
 
 // Mock Notice
 export class Notice {
+  private message: string;
+
   constructor(message: string, timeout?: number) {
+    this.message = message;
+    const constructSpy = (globalThis as any).__noticeConstructSpy;
+    if (typeof constructSpy === "function") {
+      constructSpy(message, timeout);
+    }
     const spy = (globalThis as any).__noticeSpy;
     if (typeof spy === "function") {
       spy(message);
@@ -112,8 +119,19 @@ export class Notice {
     }
   }
 
+  setMessage(message: string) {
+    this.message = message;
+    const spy = (globalThis as any).__noticeSpy;
+    if (typeof spy === "function") {
+      spy(message);
+    }
+  }
+
   hide() {
-    // Do nothing in mock
+    const spy = (globalThis as any).__noticeHideSpy;
+    if (typeof spy === "function") {
+      spy(this.message);
+    }
   }
 }
 
