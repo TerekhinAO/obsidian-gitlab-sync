@@ -47,7 +47,9 @@ export class StateStore {
         // Schema 1 did not carry remote backoff; null keeps old data safe.
         remoteBackoffUntil: raw?.state?.remoteBackoffUntil ?? null,
         remoteBackoffReason: raw?.state?.remoteBackoffReason ?? null,
-        schemaVersion: 2,
+        // Schema 2 → 3 only adds the nullable `remoteApply` field; no data rewrite is needed.
+        remoteApply: raw?.state?.remoteApply ?? null,
+        schemaVersion: 3,
       },
     };
   }
@@ -65,7 +67,8 @@ export class StateStore {
         dirtyEntries: { ...data.state.dirtyEntries },
         remoteBackoffUntil: data.state.remoteBackoffUntil ?? null,
         remoteBackoffReason: data.state.remoteBackoffReason ?? null,
-        schemaVersion: 2,
+        remoteApply: data.state.remoteApply ?? null,
+        schemaVersion: 3,
       },
     };
 

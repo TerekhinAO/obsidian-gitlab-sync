@@ -14,6 +14,18 @@ export interface TrackedFile {
   size: number;
 }
 
+export type RemoteChange =
+  | { type: "create"; path: string }
+  | { type: "update"; path: string }
+  | { type: "delete"; path: string }
+  | { type: "rename"; oldPath: string; newPath: string };
+
+export interface RemoteApply {
+  remoteSha: string;
+  remainingChanges: RemoteChange[];
+  nextTrackedFiles: Record<string, TrackedFile>;
+}
+
 export interface GitLabSyncSettings {
   gitlabBaseUrl: string;
   projectPath: string;
@@ -41,6 +53,10 @@ export interface MaterializeOperation {
   contentBase64?: string;
 }
 
+export type ByteMaterializeOperation =
+  | { type: "write"; path: string; bytes: Uint8Array }
+  | { type: "delete"; path: string };
+
 export interface PendingTransaction {
   transactionId: string;
   committedSha: string;
@@ -52,7 +68,7 @@ export interface PendingTransaction {
 }
 
 export interface LocalSyncState {
-  schemaVersion: 2;
+  schemaVersion: 3;
   initialized: boolean;
   lastSyncedCommitSha: string | null;
   trackedFiles: Record<string, TrackedFile>;
@@ -62,6 +78,7 @@ export interface LocalSyncState {
   lastSyncResult: "never" | "success" | "conflict" | "error";
   remoteBackoffUntil: number | null;
   remoteBackoffReason: "rate-limit" | "server" | "transport" | null;
+  remoteApply: RemoteApply | null;
 }
 
 export interface PluginData {

@@ -120,7 +120,7 @@ describe("StateStore", () => {
 
     const data = await new StateStore(plugin).load();
 
-    expect(data.state.schemaVersion).toBe(2);
+    expect(data.state.schemaVersion).toBe(3);
     expect(data.state.remoteBackoffUntil).toBeNull();
     expect(data.state.remoteBackoffReason).toBeNull();
     expect(data.state.trackedFiles).toEqual({
@@ -142,8 +142,53 @@ describe("StateStore", () => {
     });
 
     const data = await store.load();
-    expect(data.state.schemaVersion).toBe(2);
+    expect(data.state.schemaVersion).toBe(3);
     expect(data.state.remoteBackoffUntil).toBe(123_456);
     expect(data.state.remoteBackoffReason).toBe("rate-limit");
+  });
+
+  it("migrates schema-2 state to schema 3 with a null remoteApply, preserving all fields", async () => {
+    const { plugin } = fakePlugin({
+      settings: { gitlabBaseUrl: "https://gitlab.example.com" },
+      state: {
+        schemaVersion: 2,
+        initialized: true,
+        lastSyncedCommitSha: "commit-a",
+        trackedFiles: { "a.md": { blobId: "blob-a", mode: "100644", size: 1 } },
+        dirtyEntries: {},
+        pendingTransaction: null,
+        lastSyncAt: 5,
+        lastSyncResult: "success",
+        remoteBackoffUntil: null,
+        remoteBackoffReason: null,
+      },
+    });
+
+    const data = await new StateStore(plugin).load();
+
+    expect(data.state.schemaVersion).toBe(3);
+    expect(data.state.remoteApply).toBeNull();
+    expect(data.state.lastSyncedCommitSha).toBe("commit-a");
+    expect(data.state.trackedFiles).toEqual({ "a.md": { blobId: "blob-a", mode: "100644", size: 1 } });
+  });
+
+  it("round-trips a persisted remoteApply resume point", async () => {
+    const { plugin } = fakePlugin();
+    const store = new StateStore(plugin);
+    await store.update((data) => {
+      data.state.remoteApply = {
+        remoteSha: "remote-a",
+        remainingChanges: [{ type: "update", path: "b.md" }],
+        nextTrackedFiles: { "a.md": { blobId: "blob-a", mode: "100644", size: 1 } },
+      };
+    });
+
+    const data = await store.load();
+    expect(data.state.schemaVersion).toBe(3);
+    expect(data.state.remoteApply).toEqual({
+      remoteSha: "remote-a",
+      remainingChanges: [{ type: "update", path: "b.md" }],
+      nextTrackedFiles: { "a.md": { blobId: "blob-a", mode: "100644", size: 1 } },
+    });
   });
 });

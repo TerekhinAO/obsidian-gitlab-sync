@@ -1,12 +1,7 @@
 import { GitLabApiError, GitLabConflictError, GitLabNotFoundError } from "../gitlab/errors";
 import type { GitLabCompareResult, GitLabTreeItem } from "../gitlab/types";
-import type { TrackedFile } from "./types";
-
-export type RemoteChange =
-  | { type: "create"; path: string }
-  | { type: "update"; path: string }
-  | { type: "delete"; path: string }
-  | { type: "rename"; oldPath: string; newPath: string };
+import type { RemoteChange, TrackedFile } from "./types";
+export type { RemoteChange };
 
 export interface RemoteDiffClient {
   compare(from: string, to: string): Promise<GitLabCompareResult>;
