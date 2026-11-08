@@ -128,12 +128,21 @@ export class StreamingRemoteApplier {
     remoteBlobId: string,
   ): Promise<Uint8Array | null> {
     const vault = this.options.vault;
-    if (!vault || !(await vault.exists(path))) {
+    if (!vault) {
       return null;
     }
-    const local = new Uint8Array(await vault.readBinary(path));
-    const localBlobId = await calculateGitBlobId(local);
-    return localBlobId === remoteBlobId ? local : null;
+    try {
+      if (!(await vault.exists(path))) {
+        return null;
+      }
+      const local = new Uint8Array(await vault.readBinary(path));
+      const localBlobId = await calculateGitBlobId(local);
+      return localBlobId === remoteBlobId ? local : null;
+    } catch {
+      // A transient local read error must never abort the whole sync; fall back to
+      // the normal download path (which will still write the file).
+      return null;
+    }
   }
 }
 

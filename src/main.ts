@@ -134,6 +134,8 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
       clearInterval(this.autoSyncIntervalHandle);
       this.autoSyncIntervalHandle = null;
     }
+    this.statusBarItem?.remove();
+    this.statusBarItem = null;
     await this.syncManager?.stopEventsListener();
   }
 

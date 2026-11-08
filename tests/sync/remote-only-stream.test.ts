@@ -163,6 +163,24 @@ describe("StreamingRemoteApplier", () => {
 
     expect(getRawFile).toHaveBeenCalledWith("new.md", "remote-a");
   });
+
+  it("falls back to downloading when the local read throws", async () => {
+    const vault = {
+      exists: vi.fn(async () => true),
+      readBinary: vi.fn(async () => {
+        throw new Error("io");
+      }),
+    };
+    const { applier, getRawFile } = makeApplier(32, vault);
+
+    await applier.applyStream({
+      changes: [{ type: "update", path: "b.md", blobId: await gitBlobId("x") }],
+      remoteSha: "remote-a",
+      baseIndex: {},
+    });
+
+    expect(getRawFile).toHaveBeenCalledWith("b.md", "remote-a");
+  });
 });
 
 async function gitBlobId(text: string): Promise<string> {
