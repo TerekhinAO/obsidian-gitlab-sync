@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { calculateGitBlobId } from "../../src/sync/conflict-resolver";
 import { StreamingRemoteApplier } from "../../src/sync/remote-only-stream";
 import type { RemoteChange } from "../../src/sync/types";
 import type { ByteMaterializeOperation, TrackedFile } from "../../src/sync/types";
@@ -7,7 +8,11 @@ function encoded(text: string): ArrayBuffer {
   return new TextEncoder().encode(text).buffer;
 }
 
-function makeApplier(chunkSize = 32) {
+function arrayBufferOf(text: string): ArrayBuffer {
+  return encoded(text);
+}
+
+function makeApplier(chunkSize = 32, vault?: { exists: (p: string) => Promise<boolean>; readBinary: (p: string) => Promise<ArrayBuffer> }) {
   const getRawFile = vi.fn(async (path: string) => encoded(`${path}-content`));
   const writes: ByteMaterializeOperation[][] = [];
   const materializer = {
@@ -15,7 +20,7 @@ function makeApplier(chunkSize = 32) {
       writes.push(operations);
     }),
   };
-  const applier = new StreamingRemoteApplier({ client: { getRawFile }, materializer, chunkSize });
+  const applier = new StreamingRemoteApplier({ client: { getRawFile }, materializer, chunkSize, vault });
   return { applier, getRawFile, materializer, writes };
 }
 
@@ -103,7 +108,66 @@ describe("StreamingRemoteApplier", () => {
       { type: "delete", path: "orphan.md" },
     ]);
   });
+
+  it("skips downloading and rewriting a file whose local content already matches the remote blobId", async () => {
+    const content = "same-content";
+    const remoteBlobId = await gitBlobId(content);
+    const vault = {
+      exists: vi.fn(async () => true),
+      readBinary: vi.fn(async () => arrayBufferOf(content)),
+    };
+    const { applier, getRawFile, writes } = makeApplier(32, vault);
+
+    const index = await applier.applyStream({
+      changes: [{ type: "update", path: "same.md", blobId: remoteBlobId }],
+      remoteSha: "remote-a",
+      baseIndex: { "same.md": tracked("stale") },
+    });
+
+    expect(getRawFile).not.toHaveBeenCalled();
+    expect(writes).toEqual([]);
+    expect(index["same.md"]).toEqual({ blobId: remoteBlobId, mode: "100644", size: content.length });
+  });
+
+  it("downloads a file when its local content differs from the remote blobId", async () => {
+    const vault = {
+      exists: vi.fn(async () => true),
+      readBinary: vi.fn(async () => arrayBufferOf("local-different")),
+    };
+    const { applier, getRawFile, writes } = makeApplier(32, vault);
+    const remoteBlobId = await gitBlobId("remote-content");
+
+    const index = await applier.applyStream({
+      changes: [{ type: "update", path: "b.md", blobId: remoteBlobId }],
+      remoteSha: "remote-a",
+      baseIndex: {},
+    });
+
+    expect(getRawFile).toHaveBeenCalledWith("b.md", "remote-a");
+    expect(writes[0]).toHaveLength(1);
+    expect(index["b.md"]).toBeDefined();
+  });
+
+  it("downloads a file when it is absent locally despite a matching-eligible blobId", async () => {
+    const vault = {
+      exists: vi.fn(async () => false),
+      readBinary: vi.fn(async () => arrayBufferOf("unused")),
+    };
+    const { applier, getRawFile } = makeApplier(32, vault);
+
+    await applier.applyStream({
+      changes: [{ type: "create", path: "new.md", blobId: await gitBlobId("x") }],
+      remoteSha: "remote-a",
+      baseIndex: {},
+    });
+
+    expect(getRawFile).toHaveBeenCalledWith("new.md", "remote-a");
+  });
 });
+
+async function gitBlobId(text: string): Promise<string> {
+  return await calculateGitBlobId(new TextEncoder().encode(text));
+}
 
 function tracked(text: string): TrackedFile {
   return { blobId: `blob-${text}`, mode: "100644", size: text.length };

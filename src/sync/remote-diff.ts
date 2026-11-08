@@ -72,7 +72,7 @@ export class RemoteDiffService {
       const base = baseIndex[path];
       const remote = remoteTree[path];
       if (!base && remote) {
-        changes.push({ type: "create", path });
+        changes.push({ type: "create", path, blobId: remote.blobId });
       } else if (base && !remote) {
         changes.push({ type: "delete", path });
       } else if (
@@ -80,7 +80,7 @@ export class RemoteDiffService {
         remote &&
         (base.blobId !== remote.blobId || base.mode !== remote.mode)
       ) {
-        changes.push({ type: "update", path });
+        changes.push({ type: "update", path, blobId: remote.blobId });
       }
     }
 

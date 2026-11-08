@@ -27,6 +27,7 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
   logger: Logger;
 
   syncRibbonIcon: HTMLElement | null = null;
+  private statusBarItem: HTMLElement | null = null;
   private layoutReady = false;
   private lastForegroundSyncAt: number | null = null;
   private lastBackgroundSyncAt: number | null = null;
@@ -49,6 +50,9 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     this.logger = new Logger(this.app.vault, this.settings.loggingLevel);
     await this.logger.init();
 
+    this.statusBarItem = this.addStatusBarItem();
+    this.statusBarItem.setText("");
+
     this.syncManager = new SyncManager({
       app: this.app,
       vault: this.app.vault,
@@ -56,7 +60,14 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
       stateStore: this.stateStore,
       settings: this.settings,
       logger: this.logger,
-      createProgressNotice: (message) => new Notice(message, 0),
+      createProgressNotice: (message) => {
+        // Live sync progress goes into the Obsidian status bar instead of a transient Notice.
+        this.statusBarItem?.setText(message);
+        return {
+          setMessage: (next) => this.statusBarItem?.setText(next),
+          hide: () => this.statusBarItem?.setText(""),
+        };
+      },
       notice: (message) => new Notice(message, 5000),
     });
     this.registerAppLifecycleHandlers();

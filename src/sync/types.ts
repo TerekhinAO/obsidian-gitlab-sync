@@ -15,8 +15,8 @@ export interface TrackedFile {
 }
 
 export type RemoteChange =
-  | { type: "create"; path: string }
-  | { type: "update"; path: string }
+  | { type: "create"; path: string; blobId?: string }
+  | { type: "update"; path: string; blobId?: string }
   | { type: "delete"; path: string }
   | { type: "rename"; oldPath: string; newPath: string };
 

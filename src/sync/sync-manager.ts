@@ -591,6 +591,8 @@ export class SyncManager {
         remoteSha,
         baseIndex: plan.nextTrackedFiles,
         onProgress: async ({ remainingChanges, nextTrackedFiles }) => {
+          const applied = plan.streamChanges.length - remainingChanges.length;
+          this.setProgress(progress, `Updating local vault… ${applied}/${plan.streamChanges.length}`);
           await this.options.stateStore.update((data) => {
             data.state.remoteApply = { remoteSha, remainingChanges, nextTrackedFiles };
           });
@@ -657,6 +659,8 @@ export class SyncManager {
         remoteSha,
         baseIndex: resume.nextTrackedFiles,
         onProgress: async ({ remainingChanges, nextTrackedFiles }) => {
+          const applied = changes.length - remainingChanges.length;
+          this.setProgress(progress, `Updating local vault… ${applied}/${changes.length}`);
           await this.options.stateStore.update((data) => {
             data.state.remoteApply = { remoteSha, remainingChanges, nextTrackedFiles };
           });
@@ -941,6 +945,12 @@ export class SyncManager {
       materializer: {
         applyBytes: (operations) => this.getMaterializer().applyBytes(operations),
       },
+      vault: this.options.vault
+        ? {
+          exists: (path) => this.options.vault!.adapter.exists(path),
+          readBinary: (path) => this.options.vault!.adapter.readBinary(path),
+        }
+        : undefined,
     });
   }
 

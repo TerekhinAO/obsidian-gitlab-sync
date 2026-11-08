@@ -13,6 +13,11 @@ export interface StreamApplyProgress {
 export interface StreamingRemoteApplierOptions {
   client: { getRawFile(path: string, ref: string): Promise<ArrayBuffer | null> };
   materializer: { applyBytes(operations: ByteMaterializeOperation[]): Promise<void> };
+  /** Optional local-file reader used to skip re-downloading files whose content already matches. */
+  vault?: {
+    exists(path: string): Promise<boolean>;
+    readBinary(path: string): Promise<ArrayBuffer>;
+  };
   chunkSize?: number;
 }
 
@@ -41,7 +46,9 @@ export class StreamingRemoteApplier {
         await this.collectOperation(change, input.remoteSha, index, operations);
       }
 
-      await this.options.materializer.applyBytes(operations);
+      if (operations.length > 0) {
+        await this.options.materializer.applyBytes(operations);
+      }
 
       if (input.onProgress) {
         await input.onProgress({
@@ -65,7 +72,7 @@ export class StreamingRemoteApplier {
     switch (change.type) {
       case "create":
       case "update":
-        await this.materializeWrite(change.path, remoteSha, index, operations);
+        await this.materializeWrite(change.path, remoteSha, index, operations, change.blobId);
         return;
       case "delete":
         operations.push({ type: "delete", path: change.path });
@@ -84,7 +91,22 @@ export class StreamingRemoteApplier {
     remoteSha: string,
     index: Record<string, TrackedFile>,
     operations: ByteMaterializeOperation[],
+    remoteBlobId?: string,
   ): Promise<void> {
+    if (remoteBlobId !== undefined && this.options.vault) {
+      const local = await this.localContentIfMatches(path, remoteBlobId);
+      if (local !== null) {
+        // The file on disk already holds the exact remote content; keep it and
+        // record the blob in the index without downloading or rewriting it.
+        index[path] = {
+          blobId: remoteBlobId,
+          mode: "100644",
+          size: local.byteLength,
+        };
+        return;
+      }
+    }
+
     const buffer = await this.options.client.getRawFile(path, remoteSha);
     if (buffer === null) {
       operations.push({ type: "delete", path });
@@ -99,6 +121,19 @@ export class StreamingRemoteApplier {
       mode: "100644",
       size: bytes.byteLength,
     };
+  }
+
+  private async localContentIfMatches(
+    path: string,
+    remoteBlobId: string,
+  ): Promise<Uint8Array | null> {
+    const vault = this.options.vault;
+    if (!vault || !(await vault.exists(path))) {
+      return null;
+    }
+    const local = new Uint8Array(await vault.readBinary(path));
+    const localBlobId = await calculateGitBlobId(local);
+    return localBlobId === remoteBlobId ? local : null;
   }
 }
 

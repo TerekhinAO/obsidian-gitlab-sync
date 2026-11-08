@@ -68,7 +68,7 @@ describe("RemoteDiffService", () => {
       });
 
       expect(result.usedFallback).toBe(true);
-      expect(result.changes).toEqual([{ type: "update", path: "note.md" }]);
+      expect(result.changes).toEqual([{ type: "update", path: "note.md", blobId: "b" }]);
     }
   });
 
@@ -110,9 +110,9 @@ describe("RemoteDiffService", () => {
 
     expect(result).toEqual({
       changes: [
-        { type: "update", path: "changed.md" },
+        { type: "update", path: "changed.md", blobId: "changed" },
         { type: "delete", path: "deleted.md" },
-        { type: "create", path: "new.md" },
+        { type: "create", path: "new.md", blobId: "new" },
       ],
       remoteTree: {
         "changed.md": { blobId: "changed", mode: "100644", size: 0 },

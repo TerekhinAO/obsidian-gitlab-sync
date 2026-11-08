@@ -140,6 +140,10 @@ export class Plugin {
     return { remove() {} } as HTMLElement;
   }
 
+  addStatusBarItem(): { setText(text: string): void; remove(): void } {
+    return { setText() {}, remove() {} };
+  }
+
   registerInterval(_interval: unknown): void {}
 
   registerEvent(_eventRef: EventRef): void {}
