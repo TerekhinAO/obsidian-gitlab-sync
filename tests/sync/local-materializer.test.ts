@@ -176,6 +176,18 @@ describe("LocalMaterializer", () => {
     expect(fixture.vault.adapter.remove).toHaveBeenCalledWith("old.md");
   });
 
+  it("applies byte-direct write and delete operations", async () => {
+    const fixture = materializer({ initialFiles: { "old.md": bytes("old") } });
+
+    await fixture.materializer.applyBytes([
+      { type: "write", path: "new.md", bytes: bytes("new") },
+      { type: "delete", path: "old.md" },
+    ]);
+
+    expect(fixture.read("new.md")).toEqual(bytes("new"));
+    expect(fixture.exists("old.md")).toBe(false);
+  });
+
   it("replaces an existing local original with remote content", async () => {
     const fixture = materializer({
       initialFiles: { "note.md": bytes("local conflict") },

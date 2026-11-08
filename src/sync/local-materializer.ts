@@ -1,7 +1,7 @@
 import { normalizePath } from "obsidian";
 import type Logger from "../logger";
 import type { StateStore } from "./state-store";
-import type { MaterializeOperation } from "./types";
+import type { ByteMaterializeOperation, MaterializeOperation } from "./types";
 
 interface MaterializerVault {
   configDir: string;
@@ -52,6 +52,20 @@ export class LocalMaterializer {
     });
   }
 
+  async applyBytes(operations: ByteMaterializeOperation[]): Promise<void> {
+    await this.options.journal.suppress(async () => {
+      for (const operation of operations) {
+        await this.assertMaterializable(operation.path);
+        if (operation.type === "write") {
+          await this.writeBytes(operation.path, arrayBufferFromBytes(operation.bytes));
+        } else {
+          await this.delete(operation.path);
+        }
+      }
+      await this.pruneEmptyParents(operations);
+    });
+  }
+
   async recoverPendingTransaction(): Promise<boolean> {
     const data = await this.options.stateStore.load();
     const pending = data.state.pendingTransaction;
@@ -83,23 +97,25 @@ export class LocalMaterializer {
     if (operation.contentBase64 === undefined) {
       throw new Error(`Write operation for ${operation.path} is missing contentBase64`);
     }
+    await this.writeBytes(operation.path, decodeBase64(operation.contentBase64));
+  }
 
-    const path = normalizePath(operation.path);
-    const bytes = decodeBase64(operation.contentBase64);
-    await this.ensureParentFolders(path);
+  private async writeBytes(path: string, data: ArrayBuffer): Promise<void> {
+    const normalized = normalizePath(path);
+    await this.ensureParentFolders(normalized);
 
     if (this.options.vault.adapter.rename === undefined) {
-      await this.options.vault.adapter.writeBinary(path, bytes);
+      await this.options.vault.adapter.writeBinary(normalized, data);
       return;
     }
 
-    const tempPath = this.tempSiblingPath(path);
-    await this.options.vault.adapter.writeBinary(tempPath, bytes);
+    const tempPath = this.tempSiblingPath(normalized);
+    await this.options.vault.adapter.writeBinary(tempPath, data);
 
     try {
-      await this.options.vault.adapter.rename(tempPath, path);
+      await this.options.vault.adapter.rename(tempPath, normalized);
     } catch (error) {
-      await this.options.vault.adapter.writeBinary(path, bytes);
+      await this.options.vault.adapter.writeBinary(normalized, data);
       await this.removeIfExists(tempPath);
     }
   }
@@ -118,7 +134,9 @@ export class LocalMaterializer {
    * Only ancestors of just-deleted paths can have become empty, so the sweep
    * stays proportional to the number of deletions instead of the vault size.
    */
-  private async pruneEmptyParents(operations: MaterializeOperation[]): Promise<void> {
+  private async pruneEmptyParents(
+    operations: ReadonlyArray<{ type: "write" | "delete"; path: string }>,
+  ): Promise<void> {
     const candidates = new Set<string>();
     for (const operation of operations) {
       if (operation.type !== "delete") {
