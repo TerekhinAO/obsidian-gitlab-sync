@@ -388,6 +388,24 @@ describe("GitLab sync integration", () => {
     expect(setup.vault.text("target.md")).toBe("target");
     await expectNoMetadata(setup);
   });
+
+  it("streams a large remote-only change set and finalizes state", async () => {
+    const setup = await initializedFixture({ "base.md": "base" });
+    const remote: Record<string, string> = {};
+    for (let i = 0; i < 70; i += 1) {
+      remote[`f${i}.md`] = `content ${i}`;
+    }
+    await setup.server.desktopCommit(remote);
+
+    const result = await setup.manager().sync("startup");
+
+    expect(result).toMatchObject({ status: "success", commitSha: setup.server.head });
+    expect(setup.vault.text("f0.md")).toBe("content 0");
+    expect(setup.vault.text("f69.md")).toBe("content 69");
+    const state = (await setup.store.load()).state;
+    expect(state.remoteApply).toBeNull();
+    expect(state.lastSyncedCommitSha).toBe(setup.server.head);
+  });
 });
 
 async function initializedFixture(initialRemoteFiles: Record<string, string | Uint8Array | ArrayBuffer>) {
@@ -625,7 +643,7 @@ function pluginData(settings: GitLabSyncSettings): PluginData {
   return {
     settings,
     state: {
-      schemaVersion: 2,
+      schemaVersion: 3,
       initialized: false,
       lastSyncedCommitSha: null,
       trackedFiles: {},
@@ -635,6 +653,7 @@ function pluginData(settings: GitLabSyncSettings): PluginData {
       lastSyncResult: "never",
       remoteBackoffUntil: null,
       remoteBackoffReason: null,
+      remoteApply: null,
     } satisfies LocalSyncState,
   };
 }
