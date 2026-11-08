@@ -184,6 +184,28 @@ are never committed, so the repository stays clean and devices never fight over 
 
 **Self-managed GitLab.** Any HTTPS GitLab instance works, alongside gitlab.com.
 
+## Rate limits and reliability on mobile
+
+Normal sync talks to GitLab over the same incremental raw-file endpoints on every device; the
+`archive.zip` download is used only when you first connect a vault, so large syncs stay incremental.
+To avoid tripping GitLab's per-minute limits, request starts are paced and only idempotent reads are
+ever repeated automatically:
+
+- When GitLab returns `429`, the plugin waits for the `Retry-After` value (or 60 seconds if it is
+  missing or invalid) and then retries, up to three times. A safe read that times out is retried
+  too.
+- A failed *commit* upload is **never** retried automatically — a timed-out push is ambiguous, so the
+  plugin surfaces it instead of risking a duplicate commit.
+- The wait is recorded locally before the request is re-sent, so if your phone suspends Obsidian
+  mid-wait, automatic triggers hold off until the backoff window passes instead of restarting the
+  burst.
+- Because requests are deliberately spaced, a large remote change set can take a little longer to
+  finish. That is expected.
+
+**Troubleshooting:** if you see a rate-limit notice, do not keep pressing **Sync**. Let the plugin
+wait out the backoff — pressing Sync again right after a `429` just adds more requests and can extend
+the wait. A later automatic or manual sync resumes normally on its own.
+
 ## Settings reference
 
 ### Sync modes
