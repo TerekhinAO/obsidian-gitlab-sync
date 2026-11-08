@@ -658,6 +658,7 @@ function gitlabSettings(server: GitLabTestServer): GitLabSyncSettings {
     loggingLevel: "off",
     loggingEnabled: false,
     conflictStrategy: "remote",
+    allowSelfSignedCertificateForConnect: false,
   };
 }
 

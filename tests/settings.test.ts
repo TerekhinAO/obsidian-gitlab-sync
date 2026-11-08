@@ -11,7 +11,7 @@ describe("GitLab settings persistence", () => {
     app.secretStorage.set("gitlab-gitless-sync-token", "glpat-test");
 
     const store = new StateStore({
-      loadData: async () => null,
+      loadData: async () => savedData,
       saveData: async (data: unknown) => {
         savedData = data;
       },
@@ -24,6 +24,47 @@ describe("GitLab settings persistence", () => {
     expect((savedData as any).settings.tokenSecretName).toBe(
       "gitlab-gitless-sync-token",
     );
+
+    // An explicit opt-in must survive save() and a subsequent load().
+    data.settings.allowSelfSignedCertificateForConnect = true;
+    await store.save(data);
+    const reloaded = await store.load();
+    expect(reloaded.settings.allowSelfSignedCertificateForConnect).toBe(true);
+  });
+
+  it("defaults Connect self-signed certificate access to false for old plugin data", async () => {
+    const store = new StateStore({
+      loadData: async () => ({
+        settings: {
+          gitlabBaseUrl: "https://gitlab.example.com",
+          projectPath: "group/project",
+          branch: "main",
+          tokenSecretName: "gitlab-token",
+          authorName: "Mobile User",
+          authorEmail: "mobile@example.com",
+          // allowSelfSignedCertificateForConnect intentionally omitted (old data)
+        },
+        state: {
+          schemaVersion: 2,
+          initialized: true,
+          lastSyncedCommitSha: "sha",
+          trackedFiles: {},
+          dirtyEntries: {},
+          pendingTransaction: null,
+          lastSyncAt: 1,
+          lastSyncResult: "success",
+          remoteBackoffUntil: null,
+          remoteBackoffReason: null,
+        },
+      }),
+      saveData: async () => undefined,
+    });
+
+    const data = await store.load();
+
+    expect(data.settings.allowSelfSignedCertificateForConnect).toBe(false);
+    expect(data.settings.projectPath).toBe("group/project");
+    expect(data.state.initialized).toBe(true);
   });
 
   it("redacts credential-shaped fields from logs", async () => {

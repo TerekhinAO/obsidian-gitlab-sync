@@ -26,6 +26,7 @@ const settings: GitLabSyncSettings = {
   loggingLevel: "off",
   loggingEnabled: false,
   conflictStrategy: "remote",
+  allowSelfSignedCertificateForConnect: false,
 };
 
 describe("SyncManager", () => {

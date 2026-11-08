@@ -32,6 +32,7 @@ export interface GitLabSyncSettings {
   loggingLevel: LogLevel;
   loggingEnabled: boolean;
   conflictStrategy: ConflictStrategy;
+  allowSelfSignedCertificateForConnect: boolean;
 }
 
 export interface MaterializeOperation {

@@ -20,6 +20,7 @@ export const DEFAULT_SETTINGS: GitLabSyncSettings = {
   loggingLevel: "off",
   loggingEnabled: false,
   conflictStrategy: "auto-remote",
+  allowSelfSignedCertificateForConnect: false,
 };
 
 export const DEFAULT_STATE: LocalSyncState = {
