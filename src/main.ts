@@ -134,6 +134,10 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
 
     const result = await this.syncManager.sync(trigger);
     this.pluginData = await this.stateStore.load();
+    if (result.status === "deferred") {
+      const waitSeconds = Math.max(1, Math.ceil((result.retryAt - Date.now()) / 1000));
+      new Notice(`Sync delayed ${waitSeconds}s until GitLab rate limit clears`);
+    }
     return result;
   }
 
@@ -381,7 +385,7 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     ) {
       return "cooldown";
     }
-    return null;
+    return this.remoteBackoffSkipReason();
   }
 
   private backgroundSyncSkipReason(): string | null {
@@ -409,7 +413,7 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     ) {
       return "cooldown";
     }
-    return null;
+    return this.remoteBackoffSkipReason();
   }
 
   private rememberAutoSync(trigger: "foreground" | "background"): void {
@@ -526,6 +530,14 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
     }
     if (this.syncManager.isSyncing()) {
       return "sync-already-running";
+    }
+    return this.remoteBackoffSkipReason();
+  }
+
+  private remoteBackoffSkipReason(): string | null {
+    const until = this.pluginData.state.remoteBackoffUntil;
+    if (until !== null && Date.now() < until) {
+      return "remote-backoff";
     }
     return null;
   }

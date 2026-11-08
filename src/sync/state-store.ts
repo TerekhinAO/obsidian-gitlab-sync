@@ -44,7 +44,10 @@ export class StateStore {
         ...(raw?.state ?? {}),
         trackedFiles: { ...(raw?.state?.trackedFiles ?? {}) },
         dirtyEntries: { ...(raw?.state?.dirtyEntries ?? {}) },
-        schemaVersion: 1,
+        // Schema 1 did not carry remote backoff; null keeps old data safe.
+        remoteBackoffUntil: raw?.state?.remoteBackoffUntil ?? null,
+        remoteBackoffReason: raw?.state?.remoteBackoffReason ?? null,
+        schemaVersion: 2,
       },
     };
   }
@@ -60,7 +63,9 @@ export class StateStore {
         ...data.state,
         trackedFiles: { ...data.state.trackedFiles },
         dirtyEntries: { ...data.state.dirtyEntries },
-        schemaVersion: 1,
+        remoteBackoffUntil: data.state.remoteBackoffUntil ?? null,
+        remoteBackoffReason: data.state.remoteBackoffReason ?? null,
+        schemaVersion: 2,
       },
     };
 

@@ -23,7 +23,7 @@ export const DEFAULT_SETTINGS: GitLabSyncSettings = {
 };
 
 export const DEFAULT_STATE: LocalSyncState = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   initialized: false,
   lastSyncedCommitSha: null,
   trackedFiles: {},
@@ -31,4 +31,6 @@ export const DEFAULT_STATE: LocalSyncState = {
   pendingTransaction: null,
   lastSyncAt: null,
   lastSyncResult: "never",
+  remoteBackoffUntil: null,
+  remoteBackoffReason: null,
 };

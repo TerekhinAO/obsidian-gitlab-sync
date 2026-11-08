@@ -20,6 +20,7 @@ import { SyncPlanner, type SyncPlan } from "./sync-planner";
 import type {
   DirtyEntry,
   GitLabSyncSettings,
+  LocalSyncState,
   MaterializeOperation,
   PendingTransaction,
   PluginData,
@@ -27,12 +28,13 @@ import type {
 } from "./types";
 
 export interface SyncResult {
-  status: "success" | "conflict" | "error" | "already-running";
+  status: "success" | "conflict" | "error" | "already-running" | "deferred";
   trigger: SyncTrigger;
   message: string;
   commitSha?: string;
   recovered?: boolean;
   attempts?: number;
+  retryAt?: number;
 }
 
 export type SyncTrigger =
@@ -252,6 +254,8 @@ export class SyncManager {
       next.state.pendingTransaction = null;
       next.state.lastSyncAt = this.now();
       next.state.lastSyncResult = "success";
+      next.state.remoteBackoffUntil = null;
+      next.state.remoteBackoffReason = null;
     });
     await this.auditLocalChanges();
     const adopted = await this.options.stateStore.load();
@@ -364,6 +368,18 @@ export class SyncManager {
 
       const data = await this.options.stateStore.load();
       this.validateInitialized(data);
+
+      const deferredRetryAt = this.remoteBackoffRetryAt(data.state);
+      if (deferredRetryAt !== null) {
+        this.setProgress(progress, "Sync deferred");
+        return {
+          status: "deferred",
+          trigger,
+          retryAt: deferredRetryAt,
+          message: "Sync deferred until GitLab backoff expires",
+        };
+      }
+
       const settings = this.validateSettings(this.options.settings ?? data.settings);
       await this.logGitLabTarget("Sync target", settings);
       const token = await this.readToken(settings);
@@ -553,6 +569,8 @@ export class SyncManager {
       data.state.pendingTransaction = null;
       data.state.lastSyncAt = this.now();
       data.state.lastSyncResult = plan.conflictPaths.length > 0 ? "conflict" : "success";
+      data.state.remoteBackoffUntil = null;
+      data.state.remoteBackoffReason = null;
     });
     this.setProgress(progress, "Sync complete");
     return {
@@ -595,6 +613,8 @@ export class SyncManager {
       data.state.pendingTransaction = null;
       data.state.lastSyncAt = this.now();
       data.state.lastSyncResult = transaction.conflictPaths.length > 0 ? "conflict" : "success";
+      data.state.remoteBackoffUntil = null;
+      data.state.remoteBackoffReason = null;
     });
   }
 
@@ -694,6 +714,7 @@ export class SyncManager {
       requestScheduler: this.getScheduler(),
       onBackoff: async (diagnostic) => {
         await this.options.logger?.warn("GitLab backoff", diagnostic);
+        await this.persistBackoff(diagnostic.reason, diagnostic.retryAt);
       },
     });
   }
@@ -872,6 +893,23 @@ export class SyncManager {
 
   private now(): number {
     return this.options.now?.() ?? Date.now();
+  }
+
+  private remoteBackoffRetryAt(state: LocalSyncState): number | null {
+    if (state.remoteBackoffUntil === null) {
+      return null;
+    }
+    return this.now() < state.remoteBackoffUntil ? state.remoteBackoffUntil : null;
+  }
+
+  private async persistBackoff(
+    reason: NonNullable<LocalSyncState["remoteBackoffReason"]>,
+    until: number,
+  ): Promise<void> {
+    await this.options.stateStore.update((data) => {
+      data.state.remoteBackoffUntil = until;
+      data.state.remoteBackoffReason = reason;
+    });
   }
 
   private nowDate(): Date {

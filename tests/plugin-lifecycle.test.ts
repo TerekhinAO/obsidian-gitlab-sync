@@ -458,6 +458,172 @@ describe("plugin lifecycle", () => {
     vi.unstubAllGlobals();
   });
 
+  it("skips foreground sync while remote backoff is active", async () => {
+    const documentTarget = new EventTarget() as Document;
+    Object.assign(documentTarget, {
+      visibilityState: "visible",
+      hidden: false,
+      hasFocus: () => true,
+    });
+    const windowTarget = new EventTarget() as Window;
+    vi.stubGlobal("document", documentTarget);
+    vi.stubGlobal("window", windowTarget);
+    let layoutCallback!: () => Promise<void>;
+    const plugin = new TestPlugin(
+      fakePluginData({
+        state: { remoteBackoffUntil: Date.now() + 600_000, remoteBackoffReason: "rate-limit" },
+      }),
+      fakeApp((callback) => {
+        layoutCallback = callback as () => Promise<void>;
+      }),
+    );
+    vi.spyOn(SyncManager.prototype, "startEventsListener").mockImplementation(() => undefined);
+    vi.spyOn(SyncManager.prototype, "recoverIfNeeded").mockResolvedValue(false);
+    const sync = vi.spyOn(SyncManager.prototype, "sync").mockResolvedValue({
+      status: "success",
+      trigger: "foreground",
+      message: "ok",
+    });
+
+    await plugin.onload();
+    await layoutCallback();
+    sync.mockClear();
+
+    const visibilityEvent = plugin.domEvents.find((event) => event.type === "visibilitychange");
+    expect(visibilityEvent).toBeDefined();
+    const callback = visibilityEvent!.callback;
+    if (typeof callback === "function") {
+      callback(new Event("visibilitychange"));
+    } else {
+      callback.handleEvent(new Event("visibilitychange"));
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sync).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("skips background sync while remote backoff is active", async () => {
+    const documentTarget = new EventTarget() as Document;
+    Object.assign(documentTarget, {
+      visibilityState: "hidden",
+      hidden: true,
+      hasFocus: () => false,
+    });
+    const windowTarget = new EventTarget() as Window;
+    vi.stubGlobal("document", documentTarget);
+    vi.stubGlobal("window", windowTarget);
+    let layoutCallback!: () => Promise<void>;
+    const plugin = new TestPlugin(
+      fakePluginData({
+        settings: { syncOnBackground: true },
+        state: { remoteBackoffUntil: Date.now() + 600_000, remoteBackoffReason: "rate-limit" },
+      }),
+      fakeApp((callback) => {
+        layoutCallback = callback as () => Promise<void>;
+      }),
+    );
+    vi.spyOn(SyncManager.prototype, "startEventsListener").mockImplementation(() => undefined);
+    vi.spyOn(SyncManager.prototype, "recoverIfNeeded").mockResolvedValue(false);
+    const sync = vi.spyOn(SyncManager.prototype, "sync").mockResolvedValue({
+      status: "success",
+      trigger: "background",
+      message: "ok",
+    });
+
+    await plugin.onload();
+    await layoutCallback();
+    sync.mockClear();
+
+    const visibilityEvent = plugin.domEvents.find((event) => event.type === "visibilitychange");
+    expect(visibilityEvent).toBeDefined();
+    const callback = visibilityEvent!.callback;
+    if (typeof callback === "function") {
+      callback(new Event("visibilitychange"));
+    } else {
+      callback.handleEvent(new Event("visibilitychange"));
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sync).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("skips edit sync while remote backoff is active", async () => {
+    vi.useFakeTimers();
+    try {
+      const listeners: Record<string, (...args: any[]) => void> = {};
+      let layoutCallback!: () => Promise<void>;
+      const app = fakeApp((callback) => {
+        layoutCallback = callback as () => Promise<void>;
+      });
+      (app.vault as any).on = (name: string, callback: (...args: any[]) => void) => {
+        listeners[name] = callback;
+        return { name };
+      };
+      const plugin = new TestPlugin(
+        fakePluginData({
+          settings: { syncAfterEdit: true, syncAfterEditDebounceSeconds: 1 },
+          state: { remoteBackoffUntil: Date.now() + 600_000, remoteBackoffReason: "rate-limit" },
+        }),
+        app,
+      );
+      vi.spyOn(SyncManager.prototype, "startEventsListener").mockImplementation(() => undefined);
+      vi.spyOn(SyncManager.prototype, "recoverIfNeeded").mockResolvedValue(false);
+      vi.spyOn(SyncManager.prototype, "isSyncing").mockReturnValue(false);
+      const sync = vi.spyOn(SyncManager.prototype, "sync").mockResolvedValue({
+        status: "success",
+        trigger: "edit",
+        message: "ok",
+      });
+
+      await plugin.onload();
+      await layoutCallback();
+      sync.mockClear();
+
+      listeners["modify"]?.({ path: "note.md" });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(sync).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("skips interval sync while remote backoff is active", async () => {
+    vi.useFakeTimers();
+    try {
+      let layoutCallback!: () => Promise<void>;
+      const plugin = new TestPlugin(
+        fakePluginData({
+          settings: { syncOnInterval: true, syncIntervalMinutes: 1 },
+          state: { remoteBackoffUntil: Date.now() + 600_000, remoteBackoffReason: "rate-limit" },
+        }),
+        fakeApp((callback) => {
+          layoutCallback = callback as () => Promise<void>;
+        }),
+      );
+      vi.spyOn(SyncManager.prototype, "startEventsListener").mockImplementation(() => undefined);
+      vi.spyOn(SyncManager.prototype, "recoverIfNeeded").mockResolvedValue(false);
+      vi.spyOn(SyncManager.prototype, "isSyncing").mockReturnValue(false);
+      const sync = vi.spyOn(SyncManager.prototype, "sync").mockResolvedValue({
+        status: "success",
+        trigger: "interval",
+        message: "ok",
+      });
+
+      await plugin.onload();
+      await layoutCallback();
+      sync.mockClear();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(sync).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
   it("merges from GitLab before adopting the existing vault when connecting", async () => {
     const app = fakeApp(() => undefined);
     (app as any).secretStorage = {

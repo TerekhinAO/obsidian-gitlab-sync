@@ -51,7 +51,7 @@ export interface PendingTransaction {
 }
 
 export interface LocalSyncState {
-  schemaVersion: 1;
+  schemaVersion: 2;
   initialized: boolean;
   lastSyncedCommitSha: string | null;
   trackedFiles: Record<string, TrackedFile>;
@@ -59,6 +59,8 @@ export interface LocalSyncState {
   pendingTransaction: PendingTransaction | null;
   lastSyncAt: number | null;
   lastSyncResult: "never" | "success" | "conflict" | "error";
+  remoteBackoffUntil: number | null;
+  remoteBackoffReason: "rate-limit" | "server" | "transport" | null;
 }
 
 export interface PluginData {

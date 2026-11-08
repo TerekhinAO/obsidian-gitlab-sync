@@ -97,6 +97,38 @@ describe("SyncManager", () => {
     expect((await fixture.store.load()).state.lastSyncedCommitSha).toBe("committed-before-restart");
   });
 
+  it("defers sync without network calls while backoff is active", async () => {
+    const fixture = managerFixture({
+      data: initializedData({
+        remoteBackoffUntil: 100_000,
+        remoteBackoffReason: "rate-limit",
+      }),
+    });
+
+    const result = await fixture.manager.sync("manual");
+
+    expect(result).toMatchObject({ status: "deferred", retryAt: 100_000 });
+    expect(fixture.gitlab.getBranch).not.toHaveBeenCalled();
+    expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
+  });
+
+  it("clears remote backoff after a successful sync", async () => {
+    const fixture = managerFixture({
+      data: initializedData({
+        remoteBackoffUntil: 0,
+        remoteBackoffReason: "rate-limit",
+      }),
+    });
+    fixture.planner.plan.mockResolvedValueOnce(remoteOnlyPlan("remote-a", []));
+
+    const result = await fixture.manager.sync("manual");
+
+    expect(result.status).toBe("success");
+    const state = (await fixture.store.load()).state;
+    expect(state.remoteBackoffUntil).toBeNull();
+    expect(state.remoteBackoffReason).toBeNull();
+  });
+
   it("materializes remote-only changes and advances state without creating a commit", async () => {
     const fixture = managerFixture({
       data: initializedData(),
@@ -539,7 +571,7 @@ function pluginData(state: Partial<LocalSyncState>): PluginData {
   return {
     settings,
     state: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       initialized: false,
       lastSyncedCommitSha: null,
       trackedFiles: {},
@@ -547,6 +579,8 @@ function pluginData(state: Partial<LocalSyncState>): PluginData {
       pendingTransaction: null,
       lastSyncAt: null,
       lastSyncResult: "never",
+      remoteBackoffUntil: null,
+      remoteBackoffReason: null,
       ...state,
     },
   };
