@@ -214,26 +214,21 @@ git commit -m "feat(sync): add schema-3 remoteApply resume state"
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/sync/local-materializer.test.ts` (follow the existing fake-adapter helpers already in that file):
+Append to `tests/sync/local-materializer.test.ts`, reusing the file's existing `materializer({ initialFiles })` fixture and its `read(path)` / `exists(path)` helpers:
 
 ```ts
 it("applies byte-direct write and delete operations", async () => {
-  const { materializer, vault } = makeMaterializer({ files: { "old.md": "old" } });
-  await materializer.applyBytes([
-    { type: "write", path: "new.md", bytes: new TextEncoder().encode("new") },
+  const fixture = materializer({ initialFiles: { "old.md": bytes("old") } });
+
+  await fixture.materializer.applyBytes([
+    { type: "write", path: "new.md", bytes: bytes("new") },
     { type: "delete", path: "old.md" },
   ]);
 
-  expect(vault.adapter.writeBinary).toHaveBeenCalledWith(
-    expect.stringContaining("new.md"),
-    expect.anything(),
-  );
-  expect(await readText(vault, "new.md")).toBe("new");
-  expect(await vault.adapter.exists("old.md")).toBe(false);
+  expect(fixture.read("new.md")).toEqual(bytes("new"));
+  expect(fixture.exists("old.md")).toBe(false);
 });
 ```
-
-(Adapt `makeMaterializer`, `readText`, and the fake vault to match the conventions already used in `tests/sync/local-materializer.test.ts` — reuse its in-memory adapter fake.)
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -740,9 +735,11 @@ async plan(input: {
     };
   }
 
-  // Commit path (unchanged semantics): materialization happens after the commit
-  // is created, so it is carried in materializeAfterCommit.
-  const materializeAfterCommit: MaterializeOperation[] = [];
+  // Non-streaming materialization (preserves pre-streaming behavior exactly,
+  // so planForActualCreatedCommit and callers that do not opt into streaming
+  // keep their current contract). The bulk loop runs here and mutates
+  // nextTrackedFiles; it is disjoint from snapshot/conflict index mutations.
+  const bulk: MaterializeOperation[] = [];
   for (const change of input.remoteChanges) {
     if (isTouchedByLocalSnapshot(change, localSnapshotPaths)) {
       continue;
@@ -751,17 +748,17 @@ async plan(input: {
       change,
       input.remoteSha,
       nextTrackedFiles,
-      materializeAfterCommit,
+      bulk,
       this.getRemoteVersion,
     );
   }
-  materializeAfterCommit.push(...conflictPlan.materializeOperations);
+  bulk.push(...conflictPlan.materializeOperations);
 
   return {
     basedOnRemoteSha: input.remoteSha,
     actions,
-    materializeAfterCommit,
-    materializeWithoutCommit: [],
+    materializeAfterCommit: actions.length > 0 ? bulk : [],
+    materializeWithoutCommit: actions.length > 0 ? [] : bulk,
     streamChanges: [],
     nextTrackedFiles,
     acknowledgedDirtyPaths,
