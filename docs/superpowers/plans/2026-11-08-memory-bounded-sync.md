@@ -1131,38 +1131,58 @@ git commit -m "feat(sync): stream remote-only apply and resume across restarts"
 **Interfaces:**
 - Consumes: schema 3 (`remoteApply`), `SyncPlan.streamChanges`, `SyncManagerOptions.createStreamingApplier`.
 
-- [ ] **Step 1: Bump remaining schema fixtures to 3**
+- [ ] **Step 1: Bump the integration fixture to schema 3 (and only that one)**
 
-Search the repo for `schemaVersion: 2`:
-Run: `./node_modules/.bin/eslint src tests` (or `grep -rn "schemaVersion: 2" tests` via the Grep tool).
+`grep -rn "schemaVersion: 2" tests` currently finds three spots. Only ONE must change:
 
-Update any test fixture that builds a `LocalSyncState`/`PluginData` directly to `schemaVersion: 3` and add `remoteApply: null` (mirroring Task 5 Step 4's `pluginData`). Files likely affected: `tests/integration/gitlab-sync.integration.test.ts`, and any helper in `tests/sync/*`.
+- `tests/integration/gitlab-sync.integration.test.ts` — the `pluginData(settings)` helper at ~line 628 builds `state` with `satisfies LocalSyncState`. Because `LocalSyncState.schemaVersion` is now the literal `3`, this helper is a **type error** and MUST be bumped. Change its `schemaVersion: 2` to `3` and add `remoteApply: null`:
+  ```ts
+  state: {
+    schemaVersion: 3,
+    initialized: false,
+    lastSyncedCommitSha: null,
+    trackedFiles: {},
+    dirtyEntries: {},
+    pendingTransaction: null,
+    lastSyncAt: null,
+    lastSyncResult: "never",
+    remoteBackoffUntil: null,
+    remoteBackoffReason: null,
+    remoteApply: null,
+  } satisfies LocalSyncState,
+  ```
+
+The other two `schemaVersion: 2` occurrences are **intentional legacy inputs and must be left unchanged**:
+- `tests/settings.test.ts:48` — "defaults Connect self-signed certificate access to false for old plugin data": a plain object literal (no `satisfies`), deliberately shaped as old schema-2 data to test backward compatibility.
+- `tests/sync/state-store.test.ts:154` — the schema-2→3 migration test's input (also a plain literal), deliberately schema-2 to test migration FROM 2.
+
+Do not change either of those. Do not run eslint for this step; verify with the Grep tool only.
 
 - [ ] **Step 2: Add a large remote-only integration regression**
 
-In `tests/integration/gitlab-sync.integration.test.ts`, add a test that drives a remote-only sync with many changes and asserts the streaming applier is used and state finalizes correctly. Reuse the integration harness already in that file (it provisions a fake GitLab client and a `SyncManager`). If the harness does not inject `createStreamingApplier`, add a spy to record `applyStream` calls.
+In `tests/integration/gitlab-sync.integration.test.ts`, add a test that drives a genuinely large remote-only sync through the REAL default streaming applier (no `createStreamingApplier` injection) and asserts the files land on disk and state finalizes. It reuses the file's existing `initializedFixture`, `setup.server.desktopCommit`, and `setup.manager().sync` harness:
 
 ```ts
 it("streams a large remote-only change set and finalizes state", async () => {
-  const changes: RemoteChange[] = Array.from({ length: 70 }, (_, i) => ({
-    type: "create" as const,
-    path: `f${i}.md`,
-  }));
-  const applier = { applyStream: vi.fn(async ({ changes: c, remoteSha, baseIndex }: any) => {
-    const index = { ...baseIndex };
-    for (const change of c) index[change.path] = tracked(`f${change.path}`);
-    return index;
-  }) };
+  const setup = await initializedFixture({ "base.md": "base" });
+  const remote: Record<string, string> = {};
+  for (let i = 0; i < 70; i += 1) {
+    remote[`f${i}.md`] = `content ${i}`;
+  }
+  await setup.server.desktopCommit(remote);
 
-  // Build a SyncManager with createStreamingApplier: () => applier and a client
-  // whose getRawFile returns distinct bytes per path, run sync("manual"), then:
-  expect(applier.applyStream).toHaveBeenCalledTimes(1);
-  expect(applier.applyStream.mock.calls[0][0].changes).toHaveLength(70);
-  // state.lastSyncedCommitSha === remote head; state.remoteApply === null.
+  const result = await setup.manager().sync("startup");
+
+  expect(result).toMatchObject({ status: "success", commitSha: setup.server.head });
+  expect(setup.vault.text("f0.md")).toBe("content 0");
+  expect(setup.vault.text("f69.md")).toBe("content 69");
+  const state = (await setup.store.load()).state;
+  expect(state.remoteApply).toBeNull();
+  expect(state.lastSyncedCommitSha).toBe(setup.server.head);
 });
 ```
 
-Adapt `tracked(...)` and the harness construction to the integration file's existing helpers.
+If `setup.server.head` is not exposed by the harness, use the branch head via `setup.server`'s existing accessor the way other tests do (e.g. `setup.server.head` is used elsewhere in the file). Add this test only if the surrounding harness supports `initializedFixture`/`desktopCommit`/`manager` the way the existing tests use them.
 
 - [ ] **Step 3: Run the integration suite**
 
