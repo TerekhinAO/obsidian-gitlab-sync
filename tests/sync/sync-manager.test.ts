@@ -4,6 +4,7 @@ import type { GitLabBranch, GitLabCommitAction, CreatedGitLabCommit } from "../.
 import type { DirtyEntry, GitLabSyncSettings, LocalSyncState, PendingTransaction, PluginData, TrackedFile } from "../../src/sync/types";
 import type { RemoteChange } from "../../src/sync/remote-diff";
 import type { SyncPlan } from "../../src/sync/sync-planner";
+import type { StreamingRemoteApplier } from "../../src/sync/remote-only-stream";
 import type { PlannerLike } from "../../src/sync/sync-manager";
 import type { VersionState } from "../../src/sync/local-snapshot";
 import type { DevicePlatform } from "../../src/device-label";
@@ -639,7 +640,7 @@ function managerFixture(options: {
       createIgnoreMatcher: () => ignoreMatcher,
       createLocalSnapshotService: () => localSnapshot,
       createPlanner: options.createPlanner ?? (() => planner),
-      createStreamingApplier: () => streamingApplier,
+      createStreamingApplier: () => streamingApplier as unknown as StreamingRemoteApplier,
       materializer,
       journal,
       vault: fakeVault(options.localFiles ?? {}),
@@ -737,6 +738,7 @@ function localCommitPlan(remoteSha: string, path: string): SyncPlan {
     ],
     materializeAfterCommit: [],
     materializeWithoutCommit: [],
+    streamChanges: [],
     nextTrackedFiles: { [path]: tracked("local") },
     acknowledgedDirtyPaths: [path],
     conflictPaths: [],

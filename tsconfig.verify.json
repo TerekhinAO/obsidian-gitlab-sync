@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "obsidian": ["./node_modules/.pnpm/obsidian@1.13.1_@codemirror+state@6.5.0_@codemirror+view@6.38.6/node_modules/obsidian"]
+    }
+  }
+}

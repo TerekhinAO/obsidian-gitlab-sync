@@ -221,6 +221,7 @@ describe("GitLab sync integration", () => {
     const failingManager = setup.manager({
       materializer: {
         recoverPendingTransaction: async () => false,
+        applyBytes: async () => {},
         apply: async () => {
           throw new Error("terminated during materialization");
         },

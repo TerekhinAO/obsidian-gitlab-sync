@@ -12,7 +12,7 @@ function makeApplier(chunkSize = 32) {
   const writes: ByteMaterializeOperation[][] = [];
   const materializer = {
     applyBytes: vi.fn(async (operations: ByteMaterializeOperation[]) => {
-      writes.push(operations.map((op) => ({ ...op, bytes: op.bytes ? new Uint8Array(op.bytes) : undefined })));
+      writes.push(operations);
     }),
   };
   const applier = new StreamingRemoteApplier({ client: { getRawFile }, materializer, chunkSize });
