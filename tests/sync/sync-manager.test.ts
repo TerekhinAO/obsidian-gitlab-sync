@@ -4,6 +4,7 @@ import type { GitLabBranch, GitLabCommitAction, CreatedGitLabCommit } from "../.
 import type { DirtyEntry, GitLabSyncSettings, LocalSyncState, MaterializeOperation, PendingTransaction, PluginData, TrackedFile } from "../../src/sync/types";
 import type { RemoteChange } from "../../src/sync/remote-diff";
 import type { SyncPlan } from "../../src/sync/sync-planner";
+import type { VersionState } from "../../src/sync/local-snapshot";
 import type { DevicePlatform } from "../../src/device-label";
 
 const settings: GitLabSyncSettings = {
@@ -127,6 +128,37 @@ describe("SyncManager", () => {
     const state = (await fixture.store.load()).state;
     expect(state.remoteBackoffUntil).toBeNull();
     expect(state.remoteBackoffReason).toBeNull();
+  });
+
+  it("performs one initial branch read and no validateAccess before planning", async () => {
+    const fixture = managerFixture({ data: initializedData() });
+    fixture.planner.plan.mockResolvedValueOnce(remoteOnlyPlan("remote-a", []));
+
+    await fixture.manager.sync("manual");
+
+    expect(fixture.gitlab.getBranch).toHaveBeenCalledTimes(1);
+    expect(fixture.gitlab.validateAccess).not.toHaveBeenCalled();
+  });
+
+  it("calls getRawFile once per ref/path within a plan attempt", async () => {
+    let getRemoteVersion:
+      | ((path: string, remoteSha: string) => Promise<VersionState>)
+      | undefined;
+    const fixture = managerFixture({
+      data: initializedData({ dirtyEntries: { "note.md": dirty("note.md") } }),
+      createPlanner: (_client, _settings, reader) => {
+        getRemoteVersion = reader;
+        return { plan: async () => remoteOnlyPlan("remote-a", []) };
+      },
+    });
+
+    await fixture.manager.sync("manual");
+
+    expect(getRemoteVersion).toBeDefined();
+    // Conflict planning and optimistic locking both read the same ref/path.
+    await getRemoteVersion!("note.md", "remote-a");
+    await getRemoteVersion!("note.md", "remote-a");
+    expect(fixture.gitlab.getRawFile).toHaveBeenCalledTimes(1);
   });
 
   it("materializes remote-only changes and advances state without creating a commit", async () => {
@@ -408,6 +440,11 @@ function managerFixture(options: {
   remoteTree?: any[];
   localFiles?: Record<string, string>;
   platform?: DevicePlatform;
+  createPlanner?: (
+    client: unknown,
+    settings: unknown,
+    getRemoteVersion: (path: string, remoteSha: string) => Promise<VersionState>,
+  ) => unknown;
 }) {
   const data = options.settings
     ? { ...options.data, settings: options.settings }
@@ -502,7 +539,7 @@ function managerFixture(options: {
       createRemoteDiffService: () => remoteDiff,
       createIgnoreMatcher: () => ignoreMatcher,
       createLocalSnapshotService: () => localSnapshot,
-      createPlanner: () => planner,
+      createPlanner: options.createPlanner ?? (() => planner),
       materializer,
       journal,
       vault: fakeVault(options.localFiles ?? {}),

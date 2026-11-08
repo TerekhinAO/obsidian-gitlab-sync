@@ -143,7 +143,11 @@ export interface SyncManagerOptions {
     client: GitLabClientLike,
     ignoreMatcher: IgnoreMatcherLike,
   ) => LocalSnapshotLike;
-  createPlanner?: (client: GitLabClientLike, settings: GitLabSyncSettings) => PlannerLike;
+  createPlanner?: (
+    client: GitLabClientLike,
+    settings: GitLabSyncSettings,
+    getRemoteVersion: (path: string, remoteSha: string) => Promise<VersionState>,
+  ) => PlannerLike;
   journal?: JournalLike;
   materializer?: MaterializerLike;
   now?: () => number;
@@ -385,7 +389,6 @@ export class SyncManager {
       const token = await this.readToken(settings);
       const client = this.createClient(settings, token);
 
-      await client.validateAccess?.();
       const firstBranch = await client.getBranch();
       this.validateBranch(firstBranch);
 
@@ -434,6 +437,10 @@ export class SyncManager {
         throw new Error("Sync is not initialized");
       }
 
+      // One memoized remote reader per plan attempt so conflict planning and
+      // optimistic locking never re-read the same ref/path twice.
+      const getRemoteVersion = this.memoizedRemoteVersion(input.client);
+
       const ignoreMatcher = this.createIgnoreMatcher();
       await ignoreMatcher.reload();
       const remoteDiff = this.createRemoteDiffService(input.client);
@@ -454,7 +461,7 @@ export class SyncManager {
       this.setProgress(input.progress, "Saving local changes…");
       const localSnapshots = await snapshotService.snapshot(dirtyEntries, trackedFiles);
       this.setProgress(input.progress, "Resolving conflicts…");
-      const planner = this.createPlanner(input.client, input.settings);
+      const planner = this.createPlanner(input.client, input.settings, getRemoteVersion);
       const plan = await planner.plan({
         baseSha,
         remoteSha,
@@ -491,6 +498,7 @@ export class SyncManager {
         baseSha,
         createdCommit,
         plan,
+        getRemoteVersion,
       );
       const transaction = this.pendingTransaction(createdCommit.id, finalizedPlan);
       await this.persistPendingTransaction(transaction);
@@ -518,6 +526,7 @@ export class SyncManager {
     baseSha: string,
     createdCommit: CreatedGitLabCommit,
     plan: SyncPlan,
+    getRemoteVersion: (path: string, remoteSha: string) => Promise<VersionState>,
   ): Promise<SyncPlan> {
     if (createdCommit.parent_ids.includes(plan.basedOnRemoteSha)) {
       return plan;
@@ -538,7 +547,7 @@ export class SyncManager {
       return plan;
     }
 
-    const planner = this.createPlanner(client, settings);
+    const planner = this.createPlanner(client, settings, getRemoteVersion);
     return await planner.plan({
       baseSha,
       remoteSha: createdCommit.id,
@@ -760,10 +769,13 @@ export class SyncManager {
     );
   }
 
-  private createPlanner(client: GitLabClientLike, settings: GitLabSyncSettings): PlannerLike {
-    return this.options.createPlanner?.(client, settings) ?? new SyncPlanner({
-      getRemoteVersion: async (path, remoteSha) =>
-        versionFromArrayBuffer(await client.getRawFile(path, remoteSha)),
+  private createPlanner(
+    client: GitLabClientLike,
+    settings: GitLabSyncSettings,
+    getRemoteVersion: (path: string, remoteSha: string) => Promise<VersionState>,
+  ): PlannerLike {
+    return this.options.createPlanner?.(client, settings, getRemoteVersion) ?? new SyncPlanner({
+      getRemoteVersion,
       deviceName: deviceLabel(settings.authorName, this.platform()),
       conflictStrategy: settings.conflictStrategy,
     });
@@ -910,6 +922,23 @@ export class SyncManager {
       data.state.remoteBackoffUntil = until;
       data.state.remoteBackoffReason = reason;
     });
+  }
+
+  private memoizedRemoteVersion(
+    client: GitLabClientLike,
+  ): (path: string, remoteSha: string) => Promise<VersionState> {
+    const cache = new Map<string, Promise<VersionState>>();
+    return (path, remoteSha) => {
+      const key = `${remoteSha}\0${path}`;
+      let pending = cache.get(key);
+      if (!pending) {
+        pending = client
+          .getRawFile(path, remoteSha)
+          .then((buffer) => versionFromArrayBuffer(buffer));
+        cache.set(key, pending);
+      }
+      return pending;
+    };
   }
 
   private nowDate(): Date {

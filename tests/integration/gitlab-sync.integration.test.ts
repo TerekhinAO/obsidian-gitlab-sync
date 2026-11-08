@@ -149,12 +149,34 @@ describe("GitLab sync integration", () => {
     await expectNoMetadata(setup);
   });
 
+  it("never uses the archive transport for a normal multi-file sync", async () => {
+    const setup = await initializedFixture({ "a.md": "a", "b.md": "b", "c.md": "c" });
+    // Bootstrap/Connect legitimately used the archive; a normal sync must not.
+    setup.server.requests.length = 0;
+    await setup.server.desktopCommit({
+      "d.md": "d",
+      "e.md": "e",
+      "a.md": "a updated",
+    });
+
+    const result = await setup.manager().sync("startup");
+
+    expect(result.status).toBe("success");
+    expect(setup.vault.text("d.md")).toBe("d");
+    expect(setup.vault.text("e.md")).toBe("e");
+    expect(setup.vault.text("a.md")).toBe("a updated");
+    expect(setup.server.requests.some(isArchiveRequest)).toBe(false);
+    await expectNoMetadata(setup);
+  });
+
   it("recomputes after a branch-head race before committing", async () => {
     const setup = await initializedFixture({ "note.md": "base" });
     await setup.writeDirty("note.md", "local");
     const branchReadsBeforeSync = setup.server.branchReads;
+    // Reads during a normal sync: 1 initial getBranch, then 1 branchBeforeCommit
+    // per plan attempt. Fire the race on the attempt-1 branch check.
     setup.server.mutateBranchOnRead(
-      branchReadsBeforeSync + 3,
+      branchReadsBeforeSync + 2,
       async () => {
         await setup.server.desktopCommit({ "desktop.md": "raced in" });
       },
@@ -163,7 +185,7 @@ describe("GitLab sync integration", () => {
     const result = await setup.manager().sync("manual");
 
     expect(result).toMatchObject({ status: "success", attempts: 2 });
-    expect(setup.server.branchReads).toBe(branchReadsBeforeSync + 4);
+    expect(setup.server.branchReads).toBe(branchReadsBeforeSync + 3);
     expect(setup.server.fileText("note.md")).toBe("local");
     expect(setup.vault.text("desktop.md")).toBe("raced in");
     await expectNoMetadata(setup);
@@ -489,7 +511,7 @@ function pluginData(settings: GitLabSyncSettings): PluginData {
   return {
     settings,
     state: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       initialized: false,
       lastSyncedCommitSha: null,
       trackedFiles: {},
@@ -497,6 +519,8 @@ function pluginData(settings: GitLabSyncSettings): PluginData {
       pendingTransaction: null,
       lastSyncAt: null,
       lastSyncResult: "never",
+      remoteBackoffUntil: null,
+      remoteBackoffReason: null,
     } satisfies LocalSyncState,
   };
 }
@@ -534,6 +558,10 @@ async function expectNoMetadata(setup: Awaited<ReturnType<typeof initializedFixt
       expect.stringMatching(/gitlab-sync-metadata\.json$/),
     ]),
   );
+}
+
+function isArchiveRequest(request: { url: string }): boolean {
+  return request.url.includes("/repository/archive.zip");
 }
 
 function bytes(value: string | number[]): Uint8Array {
