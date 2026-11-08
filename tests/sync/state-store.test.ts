@@ -92,7 +92,7 @@ describe("StateStore", () => {
     expect(Object.keys(data.state.dirtyEntries).sort()).toEqual(["a.md", "b.md"]);
   });
 
-  it("migrates schema-1 state to schema 2 without losing tracked files, dirty entries, or transactions", async () => {
+  it("migrates schema-1 state to schema 3 without losing tracked files, dirty entries, or transactions", async () => {
     const pendingTransaction = {
       transactionId: "tx-1",
       committedSha: "commit-a",

@@ -243,6 +243,36 @@ describe("SyncManager", () => {
     expect(state.lastSyncedCommitSha).toBe("remote-a");
   });
 
+  it("skips a dirty path when resuming a remote-only apply and keeps its dirty entry", async () => {
+    const fixture = managerFixture({
+      data: initializedData({
+        dirtyEntries: { "resume.md": dirty("resume.md") },
+        remoteApply: {
+          remoteSha: "remote-a",
+          remainingChanges: [
+            { type: "update", path: "resume.md" },
+            { type: "create", path: "other.md" },
+          ],
+          nextTrackedFiles: {},
+        },
+      }),
+      branchHeads: ["remote-a"],
+    });
+
+    await expect(fixture.manager.sync("manual")).resolves.toMatchObject({
+      status: "success",
+      commitSha: "remote-a",
+    });
+
+    expect(fixture.streamingApplier.applyStream).toHaveBeenCalledTimes(1);
+    const call = fixture.streamingApplier.applyStream.mock.calls[0][0];
+    // The dirty resume.md change is skipped; only other.md is materialized.
+    expect(call.changes).toEqual([{ type: "create", path: "other.md" }]);
+    const state = (await fixture.store.load()).state;
+    expect(state.dirtyEntries).toEqual({ "resume.md": dirty("resume.md") });
+    expect(state.remoteApply).toBeNull();
+  });
+
   it("discards a stale resume point when the remote head moved", async () => {
     const fixture = managerFixture({
       data: initializedData({

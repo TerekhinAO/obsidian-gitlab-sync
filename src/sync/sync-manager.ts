@@ -641,10 +641,19 @@ export class SyncManager {
     progress?: ProgressNotice,
   ): Promise<SyncResult> {
     this.setProgress(progress, "Updating local vault…");
+    // Build the dirty-path set once from the current persisted state. A user edit made after
+    // the crash but still present in the resume tail must NOT be clobbered by materializing the
+    // remote version over it; the dirty entry survives and the next normal sync re-plans it
+    // (conflict resolution). For the pure crash case dirtyEntries is empty, so this is zero-cost.
+    const loaded = await this.options.stateStore.load();
+    const dirtyPaths = new Set<string>(
+      Object.keys(loaded.state.dirtyEntries ?? {}).map((path) => normalizePath(path)),
+    );
+    const changes = this.excludeDirtyChanges(resume.remainingChanges, dirtyPaths);
     const finalIndex = await this.getJournal().suppress(async () => {
       const applier = this.getStreamingApplier(client);
       return await applier.applyStream({
-        changes: resume.remainingChanges,
+        changes,
         remoteSha,
         baseIndex: resume.nextTrackedFiles,
         onProgress: async ({ remainingChanges, nextTrackedFiles }) => {
@@ -674,6 +683,25 @@ export class SyncManager {
       commitSha: remoteSha,
       attempts: 1,
     };
+  }
+
+  /**
+   * Drops any change whose path (or either rename path) is currently dirty locally. Such a
+   * change is not materialized during resume so a user's edit made after a crash is preserved;
+   * the surviving dirty entry is re-planned by the next normal sync instead of being silently
+   * acknowledged away.
+   */
+  private excludeDirtyChanges(
+    changes: RemoteChange[],
+    dirtyPaths: Set<string>,
+  ): RemoteChange[] {
+    return changes.filter((change) => {
+      const paths =
+        change.type === "rename"
+          ? [change.oldPath, change.newPath]
+          : [change.path];
+      return !paths.some((path) => dirtyPaths.has(normalizePath(path)));
+    });
   }
 
   private pendingTransaction(
