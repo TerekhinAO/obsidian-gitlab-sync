@@ -149,6 +149,23 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
     new Setting(containerEl).setName("Vault setup").setHeading();
 
     const setupState = vaultSetupViewState(this.plugin.pluginData.state);
+
+    if (setupState.showSetupActions) {
+      new Setting(containerEl)
+        .setName("Allow self-signed certificate for Connect")
+        .setDesc(
+          "Connect archive download only. Disables TLS certificate verification and can expose the GitLab token. Enable only for a trusted GitLab and network.",
+        )
+        .addToggle((toggle) =>
+          toggle
+            .setValue(this.plugin.settings.allowSelfSignedCertificateForConnect)
+            .onChange(async (value) => {
+              this.plugin.settings.allowSelfSignedCertificateForConnect = value;
+              await this.plugin.saveSettings();
+            }),
+        );
+    }
+
     const setupSetting = new Setting(containerEl)
       .setName(setupState.title)
       .setDesc(setupState.description);

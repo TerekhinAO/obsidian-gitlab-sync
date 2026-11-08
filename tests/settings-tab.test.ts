@@ -118,6 +118,52 @@ describe("settings tab render", () => {
     delete (globalThis as any).__noticeSpy;
   });
 
+  it("renders the self-signed certificate toggle in the pre-connect Vault setup block", () => {
+    const container = renderTab(fakePlugin());
+    const toggle = container.toggles.find(
+      (candidate) => candidate.name === "Allow self-signed certificate for Connect",
+    );
+
+    expect(toggle).toBeDefined();
+    expect(toggle!.description).toContain("Connect archive download");
+    expect(toggle!.description).toContain("token");
+    expect(toggle!.value).toBe(false);
+  });
+
+  it("persists the Connect self-signed certificate toggle", async () => {
+    const plugin = fakePlugin();
+    const container = renderTab(plugin);
+    const toggle = container.toggles.find(
+      (candidate) => candidate.name === "Allow self-signed certificate for Connect",
+    )!;
+
+    expect(toggle).toBeDefined();
+    await toggle.change(true);
+
+    expect(plugin.settings.allowSelfSignedCertificateForConnect).toBe(true);
+    expect(plugin.saveSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the Connect self-signed certificate toggle after initialization", () => {
+    const plugin = fakePlugin();
+    plugin.pluginData = {
+      ...plugin.pluginData,
+      state: {
+        ...plugin.pluginData.state,
+        initialized: true,
+        lastSyncedCommitSha: "abc",
+      },
+    };
+
+    const container = renderTab(plugin);
+
+    expect(
+      container.toggles.some(
+        (candidate) => candidate.name === "Allow self-signed certificate for Connect",
+      ),
+    ).toBe(false);
+  });
+
   it("opens the confirm modal and connects when preview is non-null", async () => {
     const plugin = fakePlugin();
     plugin.previewConnect = vi.fn(async (): Promise<ConnectPreview | null> => ({

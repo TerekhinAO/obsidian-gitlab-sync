@@ -163,6 +163,9 @@ export class MockElement {
   // Buttons record MockButtonComponents created by Setting.addButton, so tests
   // can assert on rendered button labels and invoke their click handlers.
   buttons: MockButtonComponent[] = [];
+  // Toggles record MockToggleComponents created by Setting.addToggle, exposing
+  // the setting name/description, current value, and change handler.
+  toggles: MockToggleComponent[] = [];
 
   createEl(tag: string, options?: { text?: string }): MockElement {
     const child = new MockElement(tag);
@@ -183,6 +186,7 @@ export class MockElement {
     this.ownText = "";
     this.rows = [];
     this.buttons = [];
+    this.toggles = [];
   }
 
   get textContent(): string {
@@ -226,6 +230,29 @@ export class MockButtonComponent {
 
   setTooltip(): this {
     return this;
+  }
+}
+
+export class MockToggleComponent {
+  name = "";
+  description = "";
+  value = false;
+  onChangeHandler: ((value: boolean) => void) | null = null;
+
+  setValue(value: boolean): this {
+    this.value = value;
+    return this;
+  }
+
+  onChange(handler: (value: boolean) => void): this {
+    this.onChangeHandler = handler;
+    return this;
+  }
+
+  /** Test seam mirroring a user toggling the control: updates value and runs the handler. */
+  async change(value: boolean): Promise<void> {
+    this.value = value;
+    await this.onChangeHandler?.(value);
   }
 }
 
@@ -278,7 +305,12 @@ export class Setting {
     return this;
   }
 
-  addToggle(_callback: (component: any) => void): this {
+  addToggle(callback: (component: any) => void): this {
+    const toggle = new MockToggleComponent();
+    toggle.name = this.row.name ?? "";
+    toggle.description = this.row.desc ?? "";
+    this.containerEl.toggles?.push(toggle);
+    callback(toggle);
     return this;
   }
 
