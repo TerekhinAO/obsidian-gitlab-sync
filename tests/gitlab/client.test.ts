@@ -509,6 +509,27 @@ describe("GitLabClient", () => {
     expect(fake.calls).toHaveLength(4);
   });
 
+  it("waits for its turn before every attempt and blocks the scheduler on rate limit", async () => {
+    const waitForTurn = vi.fn().mockResolvedValue(undefined);
+    const blockUntil = vi.fn();
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const now = vi.fn(() => 100_000);
+    fake.queue({ status: 429, headers: { "Retry-After": "7" }, json: {} });
+    fake.queue({
+      status: 200,
+      json: { name: "main", can_push: true, commit: { id: "abc", parent_ids: [] } },
+    });
+
+    await new GitLabClient(settings, "token", {
+      sleep,
+      now,
+      requestScheduler: { waitForTurn, blockUntil },
+    }).getBranch();
+
+    expect(waitForTurn).toHaveBeenCalledTimes(2);
+    expect(blockUntil).toHaveBeenCalledWith(107_000);
+  });
+
   it("retries a GET after a requestUrl transport failure", async () => {
     const sleep = vi.fn().mockResolvedValue(undefined);
     fake.queueError(new Error("network down"));

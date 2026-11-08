@@ -1,6 +1,7 @@
 import { normalizePath, Platform, type App, type Plugin, type Vault } from "obsidian";
 import { commitDeviceLabel, deviceLabel, type DevicePlatform } from "../device-label";
 import { GitLabClient } from "../gitlab/client";
+import type { GitLabRequestScheduler } from "../gitlab/request-scheduler";
 import type {
   CreatedGitLabCommit,
   GitLabBranch,
@@ -145,6 +146,8 @@ export interface SyncManagerOptions {
   materializer?: MaterializerLike;
   now?: () => number;
   nowDate?: () => Date;
+  sleep?: (milliseconds: number) => Promise<void>;
+  createRequestScheduler?: () => GitLabRequestScheduler;
   notice?: (message: string) => void;
   createProgressNotice?: (message: string) => ProgressNotice;
   /** Overrides Obsidian's `Platform` so device naming can be exercised in tests. */
@@ -157,8 +160,21 @@ export class SyncManager {
   private syncing = false;
   private journal?: JournalLike;
   private materializer?: MaterializerLike;
+  private requestScheduler?: GitLabRequestScheduler;
 
   constructor(private readonly options: SyncManagerOptions) {}
+
+  private getScheduler(): GitLabRequestScheduler {
+    if (!this.requestScheduler) {
+      this.requestScheduler =
+        this.options.createRequestScheduler?.() ??
+        new GitLabRequestScheduler({
+          now: this.options.now,
+          sleep: this.options.sleep,
+        });
+    }
+    return this.requestScheduler;
+  }
 
   isSyncing(): boolean {
     return this.syncing;
@@ -673,6 +689,11 @@ export class SyncManager {
       },
       onArchiveDiagnostic: async (diagnostic) => {
         await this.options.logger?.debug("GitLab archive transport", diagnostic);
+      },
+      sleep: this.options.sleep,
+      requestScheduler: this.getScheduler(),
+      onBackoff: async (diagnostic) => {
+        await this.options.logger?.warn("GitLab backoff", diagnostic);
       },
     });
   }
