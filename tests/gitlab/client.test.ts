@@ -309,7 +309,8 @@ describe("GitLabClient", () => {
             "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/archive.zip?sha=head-sha&include_lfs_blobs=false" ||
           request.method !== "GET" ||
           request.headers.Accept !== "application/zip" ||
-          request.headers["PRIVATE-TOKEN"] !== "glpat-secret"
+          request.headers["PRIVATE-TOKEN"] !== "glpat-secret" ||
+          request.rejectUnauthorized !== true
         ) {
           throw new Error("fallback request does not match the working curl request");
         }
@@ -370,6 +371,42 @@ describe("GitLabClient", () => {
       },
     ]);
     expect(JSON.stringify(diagnostics)).not.toContain("glpat-secret");
+  });
+
+  it("allows a self-signed certificate only for the opted-in Connect archive fallback", async () => {
+    const enabled = { ...settings, allowSelfSignedCertificateForConnect: true };
+    fake.queue({
+      status: 406,
+      headers: { "content-type": "application/json" },
+      json: { message: "406 Not Acceptable" },
+      text: '{"message":"406 Not Acceptable"}',
+    });
+    let captured: any;
+    const zip = arrayBufferFromText("PK zip bytes");
+
+    const result = await new GitLabClient(enabled, "glpat-secret", {
+      requestArchiveFallback: async (request) => {
+        captured = request;
+        return { status: 200, headers: {}, arrayBuffer: zip, text: "" };
+      },
+    }).downloadArchive("head-sha");
+
+    expect(result).toEqual(zip);
+    expect(captured.rejectUnauthorized).toBe(false);
+    expect(captured.method).toBe("GET");
+    expect(captured.url).toContain("/repository/archive.zip");
+
+    // A normal API call with the same enabled settings stays on requestUrl and
+    // never touches the archive fallback.
+    fake.queue({
+      status: 200,
+      json: { name: "main", can_push: true, commit: { id: "abc", parent_ids: [] } },
+    });
+    const normalFallback = vi.fn();
+    await new GitLabClient(enabled, "glpat-secret", {
+      requestArchiveFallback: normalFallback,
+    }).getBranch();
+    expect(normalFallback).not.toHaveBeenCalled();
   });
 
   it.each([

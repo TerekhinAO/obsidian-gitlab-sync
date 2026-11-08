@@ -246,6 +246,7 @@ export class GitLabClient {
         "PRIVATE-TOKEN": this.token,
         "User-Agent": "curl/8.7.1",
       },
+      rejectUnauthorized: !this.settings.allowSelfSignedCertificateForConnect,
     };
     const response = await this.requestArchiveFallback(request);
     await this.archiveDiagnostic("node-https", response, "GET", url, true);

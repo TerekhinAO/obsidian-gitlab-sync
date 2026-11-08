@@ -4,6 +4,7 @@ export interface ArchiveFallbackRequest {
   url: string;
   method: "GET";
   headers: Record<string, string>;
+  rejectUnauthorized: boolean;
 }
 
 export interface ArchiveFallbackResponse {
@@ -15,16 +16,18 @@ export interface ArchiveFallbackResponse {
 
 export async function requestArchiveWithNode(
   request: ArchiveFallbackRequest,
+  transportOverride?: Pick<typeof import("https"), "request">,
 ): Promise<ArchiveFallbackResponse> {
   const url = new URL(request.url);
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- Obsidian's CommonJS loader cannot resolve dynamic imports.
-  const transport = require(url.protocol === "https:" ? "https" : "http") as
-    typeof import("https");
+  const transport = transportOverride ??
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- Obsidian's CommonJS loader cannot resolve dynamic imports.
+    (require(url.protocol === "https:" ? "https" : "http") as typeof import("https"));
 
   return await new Promise((resolve, reject) => {
     const outgoing = transport.request(url, {
       method: request.method,
       headers: request.headers,
+      rejectUnauthorized: request.rejectUnauthorized,
     }, (response) => {
       const chunks: Uint8Array[] = [];
       response.on("data", (chunk: Uint8Array) => chunks.push(chunk));
