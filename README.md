@@ -98,6 +98,21 @@ anything; nothing happens until you confirm. One button handles every starting s
 Keep Obsidian open until the confirmation notice appears. After that, **Sync with GitLab** (sidebar
 icon or command palette) syncs on demand at any time.
 
+#### Self-signed certificates
+
+If Connect fails on desktop with a `self signed certificate in certificate chain` error, the vault
+setup block shows an extra, default-off toggle **Allow self-signed certificate for Connect** right
+before the Connect button. It is a narrow escape hatch:
+
+- It disables TLS certificate verification **only** for the desktop Node HTTPS archive download used
+  by the initial Connect operation.
+- It does **not** change ordinary incremental sync, raw file/blob reads, commit uploads, or how
+  Obsidian `requestUrl` validates certificates.
+- Enable it only when Connect reports a certificate error against a GitLab and network you trust —
+  an intercepted connection could otherwise expose your GitLab token.
+- After a successful Connect the control is hidden and the stored value is dormant (normal sync never
+  uses the archive fallback). **Reset local sync state** makes the control and setup block appear again.
+
 ### Step 3 — Turn on automatic sync
 
 All automatic modes live under **Settings → GitLab Gitless Sync → Sync** and are off-by-default

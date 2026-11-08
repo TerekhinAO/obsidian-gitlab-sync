@@ -20,3 +20,18 @@ reliable:
 Normal sync keeps using the incremental raw-file endpoints on every device; the `archive.zip`
 download remains Connect/bootstrap-only. No Reset or reconnecting is required — just install the
 update.
+
+## Connect self-signed certificate opt-in
+
+Fixes desktop Connect failing with `self signed certificate in certificate chain` on a network that
+uses TLS interception. The Vault setup block now shows a default-off toggle **Allow self-signed
+certificate for Connect**.
+
+- It disables TLS verification **only** for the desktop Node HTTPS archive download used by the
+  initial Connect operation.
+- Normal incremental sync, raw reads, commit uploads, and Obsidian `requestUrl` certificate handling
+  are unchanged.
+- Enable it only when Connect reports a certificate error against a GitLab and network you trust —
+  an intercepted connection could otherwise expose your GitLab token.
+- The control is hidden after a successful Connect; its stored value stays dormant because normal
+  sync never uses the archive fallback.

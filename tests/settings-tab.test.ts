@@ -151,7 +151,6 @@ describe("settings tab render", () => {
       state: {
         ...plugin.pluginData.state,
         initialized: true,
-        lastSyncedCommitSha: "abc",
       },
     };
 
