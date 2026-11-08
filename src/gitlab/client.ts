@@ -8,6 +8,7 @@ import {
   GitLabNotFoundError,
   GitLabPayloadTooLargeError,
   GitLabRateLimitError,
+  GitLabTransportError,
 } from "./errors";
 import type {
   CreateCommitInput,
@@ -58,6 +59,25 @@ export interface GitLabClientOptions {
   ) => Promise<ArchiveFallbackResponse>;
   onArchiveDiagnostic?: (diagnostic: ArchiveTransportDiagnostic) => void | Promise<void>;
   sleep?: (milliseconds: number) => Promise<void>;
+  now?: () => number;
+  maxGetRetries?: number;
+  defaultRateLimitDelayMs?: number;
+  onBackoff?: (diagnostic: GitLabBackoffDiagnostic) => void | Promise<void>;
+  requestScheduler?: GitLabRequestSchedulerLike;
+}
+
+export interface GitLabBackoffDiagnostic {
+  reason: "rate-limit" | "server" | "transport";
+  method: string;
+  path: string;
+  attempt: number;
+  delayMs: number;
+  retryAt: number;
+}
+
+export interface GitLabRequestSchedulerLike {
+  waitForTurn(): Promise<void>;
+  blockUntil(timestamp: number): void;
 }
 
 export interface ArchiveTransportDiagnostic {
@@ -90,6 +110,11 @@ export class GitLabClient {
     diagnostic: ArchiveTransportDiagnostic,
   ) => void | Promise<void>;
   private readonly sleep: (milliseconds: number) => Promise<void>;
+  private readonly now: () => number;
+  private readonly maxGetRetries: number;
+  private readonly defaultRateLimitDelayMs: number;
+  private readonly onBackoff?: (diagnostic: GitLabBackoffDiagnostic) => void | Promise<void>;
+  private readonly requestScheduler?: GitLabRequestSchedulerLike;
   private readonly baseUrl: string;
   private readonly projectPath: string;
 
@@ -116,6 +141,11 @@ export class GitLabClient {
       options.sleep ??
       ((milliseconds: number) =>
         new Promise((resolve) => window.setTimeout(resolve, milliseconds)));
+    this.now = options.now ?? (() => Date.now());
+    this.maxGetRetries = options.maxGetRetries ?? 3;
+    this.defaultRateLimitDelayMs = options.defaultRateLimitDelayMs ?? 60_000;
+    this.onBackoff = options.onBackoff;
+    this.requestScheduler = options.requestScheduler;
   }
 
   async validateAccess(): Promise<void> {
@@ -296,12 +326,16 @@ export class GitLabClient {
     },
     responseType: "json" | "arrayBuffer",
   ): Promise<{ json: T; arrayBuffer: ArrayBuffer; headers?: Record<string, string> }> {
+    const method = options.method ?? "GET";
+    const isGet = method === "GET";
     let attempt = 0;
 
     while (true) {
-      const method = options.method ?? "GET";
       const url = await this.requestUrl(path, method);
+      await this.requestScheduler?.waitForTurn();
+
       let response: RequestUrlResponse;
+      let transportFailure: string | null = null;
       try {
         response = (await requestUrl({
           url,
@@ -312,10 +346,25 @@ export class GitLabClient {
           throw: false,
         })) as RequestUrlResponse;
       } catch (error) {
-        throw new GitLabApiError(
-          0,
-          `GitLab request failed before response for ${method} ${url}: ${errorMessage(error)}`,
-        );
+        transportFailure =
+          `GitLab request failed before response for ${method} ${url}: ${errorMessage(error)}`;
+      }
+
+      if (transportFailure !== null) {
+        // Only idempotent GETs are safe to re-issue after a transport error;
+        // a POST timeout is indeterminate and must never auto-repeat.
+        if (!isGet) {
+          throw new GitLabTransportError(transportFailure);
+        }
+        if (attempt >= this.maxGetRetries) {
+          throw new GitLabTransportError(transportFailure);
+        }
+        const delayMs = 1_000 * 2 ** attempt;
+        const retryAt = this.now() + delayMs;
+        await this.onBackoff?.({ reason: "transport", method, path, attempt, delayMs, retryAt });
+        await this.sleep(delayMs);
+        attempt += 1;
+        continue;
       }
 
       await options.onResponse?.(response, method, url);
@@ -330,12 +379,33 @@ export class GitLabClient {
         };
       }
 
+      if (isGet && response.status === 429) {
+        if (attempt >= this.maxGetRetries) {
+          throw this.toError(response, method, url);
+        }
+        const retryAfterSeconds = this.parseRetryAfter(response.headers);
+        const delayMs =
+          retryAfterSeconds && retryAfterSeconds > 0
+            ? retryAfterSeconds * 1_000
+            : this.defaultRateLimitDelayMs;
+        const retryAt = this.now() + delayMs;
+        await this.requestScheduler?.blockUntil(retryAt);
+        await this.onBackoff?.({ reason: "rate-limit", method, path, attempt, delayMs, retryAt });
+        await this.sleep(delayMs);
+        attempt += 1;
+        continue;
+      }
+
       if (
+        isGet &&
         response.status >= 500 &&
         response.status < 600 &&
         attempt < this.maxTransientRetries
       ) {
-        await this.sleep(this.initialRetryDelayMs * 2 ** attempt);
+        const delayMs = this.initialRetryDelayMs * 2 ** attempt;
+        const retryAt = this.now() + delayMs;
+        await this.onBackoff?.({ reason: "server", method, path, attempt, delayMs, retryAt });
+        await this.sleep(delayMs);
         attempt += 1;
         continue;
       }

@@ -15,23 +15,34 @@ export interface FakeRequestUrlResponse {
   text?: string;
 }
 
+type FakeRequestUrlItem =
+  | FakeRequestUrlResponse
+  | { error: Error };
+
 export class FakeRequestUrl {
   readonly calls: FakeRequestUrlOptions[] = [];
-  private responses: FakeRequestUrlResponse[] = [];
+  private items: FakeRequestUrlItem[] = [];
 
   queue(response: FakeRequestUrlResponse): void {
-    this.responses.push(response);
+    this.items.push(response);
+  }
+
+  queueError(error: Error): void {
+    this.items.push({ error });
   }
 
   requestUrl = async (
     options: FakeRequestUrlOptions,
   ): Promise<FakeRequestUrlResponse> => {
     this.calls.push(options);
-    const response = this.responses.shift();
-    if (!response) {
+    const item = this.items.shift();
+    if (!item) {
       throw new Error(`No fake response queued for ${options.url}`);
     }
-    return response;
+    if ("error" in item) {
+      throw item.error;
+    }
+    return item;
   };
 }
 

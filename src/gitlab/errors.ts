@@ -46,6 +46,13 @@ export class GitLabRateLimitError extends GitLabApiError {
   }
 }
 
+export class GitLabTransportError extends GitLabApiError {
+  constructor(message: string) {
+    super(0, message);
+    this.name = "GitLabTransportError";
+  }
+}
+
 export class GitLabPayloadTooLargeError extends Error {
   constructor(message: string) {
     super(message);

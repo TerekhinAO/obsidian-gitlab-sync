@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitLabSyncSettings } from "../../src/sync/types";
 import {
+  GitLabApiError,
   GitLabAuthenticationError,
   GitLabConflictError,
   GitLabForbiddenError,
   GitLabNotFoundError,
   GitLabPayloadTooLargeError,
   GitLabRateLimitError,
+  GitLabTransportError,
 } from "../../src/gitlab/errors";
 import { GitLabClient } from "../../src/gitlab/client";
 import {
@@ -382,7 +384,8 @@ describe("GitLabClient", () => {
       json: { message: "GitLab says no" },
     });
 
-    const error = await new GitLabClient(settings, "token")
+    // Disable GET retries so the 429 row maps to GitLabRateLimitError immediately.
+    const error = await new GitLabClient(settings, "token", { maxGetRetries: 0 })
       .getBranch()
       .catch((caught) => caught);
 
@@ -452,6 +455,95 @@ describe("GitLabClient", () => {
     expect(fake.calls).toHaveLength(3);
     expect(sleep).toHaveBeenCalledWith(250);
     expect(sleep).toHaveBeenCalledWith(500);
+  });
+
+  it("waits for Retry-After and retries an idempotent GET", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const onBackoff = vi.fn();
+    fake.queue({ status: 429, headers: { "Retry-After": "7" }, json: { message: "slow down" } });
+    fake.queue({
+      status: 200,
+      json: { name: "main", can_push: true, commit: { id: "abc", parent_ids: [] } },
+    });
+
+    await new GitLabClient(settings, "token", { sleep, onBackoff }).getBranch();
+
+    expect(fake.calls).toHaveLength(2);
+    expect(sleep).toHaveBeenCalledWith(7_000);
+    expect(onBackoff).toHaveBeenCalledWith(expect.objectContaining({
+      reason: "rate-limit",
+      delayMs: 7_000,
+    }));
+  });
+
+  it.each([
+    ["missing", {}],
+    ["zero", { "Retry-After": "0" }],
+    ["invalid", { "Retry-After": "abc" }],
+  ])("uses the safe default when Retry-After is %s", async (_label, headers) => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    fake.queue({ status: 429, headers, json: {} });
+    fake.queue({
+      status: 200,
+      json: { name: "main", can_push: true, commit: { id: "abc", parent_ids: [] } },
+    });
+
+    await new GitLabClient(settings, "token", { sleep }).getBranch();
+
+    expect(fake.calls).toHaveLength(2);
+    expect(sleep).toHaveBeenCalledWith(60_000);
+  });
+
+  it("stops after three GET retries and returns GitLabRateLimitError", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    for (let index = 0; index < 4; index += 1) {
+      fake.queue({ status: 429, headers: { "Retry-After": "7" }, json: {} });
+    }
+
+    const error = await new GitLabClient(settings, "token", { sleep })
+      .getBranch()
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(GitLabRateLimitError);
+    expect(sleep).toHaveBeenCalledTimes(3);
+    expect(fake.calls).toHaveLength(4);
+  });
+
+  it("retries a GET after a requestUrl transport failure", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    fake.queueError(new Error("network down"));
+    fake.queue({
+      status: 200,
+      json: { name: "main", can_push: true, commit: { id: "abc", parent_ids: [] } },
+    });
+
+    await new GitLabClient(settings, "token", { sleep }).getBranch();
+
+    expect(fake.calls).toHaveLength(2);
+    expect(sleep).toHaveBeenCalledWith(1_000);
+  });
+
+  it("does not retry a POST after a requestUrl transport failure", async () => {
+    fake.queueError(new Error("network down"));
+
+    const error = await new GitLabClient(settings, "token")
+      .createCommit({ message: "sync", actions: [] })
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(GitLabTransportError);
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  it("does not retry a POST after an ambiguous 5xx response", async () => {
+    fake.queue({ status: 502, json: { message: "bad gateway" } });
+
+    const error = await new GitLabClient(settings, "token")
+      .createCommit({ message: "sync", actions: [] })
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(GitLabApiError);
+    expect(error.status).toBe(502);
+    expect(fake.calls).toHaveLength(1);
   });
 
   it("warns for large commit payloads without splitting the commit", async () => {
