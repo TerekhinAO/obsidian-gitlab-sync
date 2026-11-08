@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RemoteChange } from "../../src/sync/remote-diff";
 import { SyncPlanner } from "../../src/sync/sync-planner";
 import type { LocalSnapshotEntry, VersionState } from "../../src/sync/local-snapshot";
@@ -25,6 +25,7 @@ describe("SyncPlanner", () => {
       actions: [],
       materializeAfterCommit: [],
       materializeWithoutCommit: [],
+      streamChanges: [],
       nextTrackedFiles: { "note.md": tracked("A") },
       acknowledgedDirtyPaths: ["note.md"],
       conflictPaths: [],
@@ -278,6 +279,57 @@ describe("SyncPlanner", () => {
       "deleted-remotely.md",
       "remote-edited.md",
     ]);
+  });
+
+  it("returns the full remote change set for streaming in a remote-only plan", async () => {
+    const getRemoteVersion = vi.fn(async () => ({ exists: true, bytes: new TextEncoder().encode("remote") }));
+    const planner = new SyncPlanner({ getRemoteVersion, deviceName: "iPhone" });
+    const plan = await planner.plan({
+      baseSha: "base-a",
+      remoteSha: "remote-a",
+      trackedFiles: {},
+      dirtyEntries: [],
+      remoteChanges: [
+        { type: "create", path: "a.md" },
+        { type: "update", path: "b.md" },
+        { type: "delete", path: "c.md" },
+      ],
+      localSnapshots: [],
+      now: new Date("2026-07-26T20:15:00+03:00"),
+      streamRemoteOnly: true,
+    });
+
+    expect(plan.actions).toEqual([]);
+    expect(plan.streamChanges).toEqual([
+      { type: "create", path: "a.md" },
+      { type: "update", path: "b.md" },
+      { type: "delete", path: "c.md" },
+    ]);
+    expect(plan.materializeWithoutCommit).toEqual([]);
+    // No bulk download during planning: remote bytes are read only for snapshots.
+    expect(getRemoteVersion).not.toHaveBeenCalled();
+  });
+
+  it("keeps the commit path materializing after the commit when streamRemoteOnly is true", async () => {
+    const planner = new SyncPlanner({
+      getRemoteVersion: async () => ({ exists: true, bytes: new TextEncoder().encode("remote") }),
+      deviceName: "iPhone",
+    });
+    const plan = await planner.plan({
+      baseSha: "base-a",
+      remoteSha: "remote-a",
+      trackedFiles: {},
+      dirtyEntries: [{ path: "local.md", operation: "upsert", recordedAt: 1 }],
+      remoteChanges: [{ type: "update", path: "remote.md" }],
+      localSnapshots: [
+        { path: "local.md", operation: "upsert", local: { exists: true, bytes: new TextEncoder().encode("local") }, base: { exists: false, bytes: null } },
+      ],
+      now: new Date("2026-07-26T20:15:00+03:00"),
+      streamRemoteOnly: true,
+    });
+
+    expect(plan.actions.length).toBeGreaterThan(0);
+    expect(plan.streamChanges).toEqual([]);
   });
 });
 

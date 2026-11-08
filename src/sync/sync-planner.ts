@@ -13,6 +13,7 @@ export interface SyncPlan {
   actions: GitLabCommitAction[];
   materializeAfterCommit: MaterializeOperation[];
   materializeWithoutCommit: MaterializeOperation[];
+  streamChanges: RemoteChange[];
   nextTrackedFiles: Record<string, TrackedFile>;
   acknowledgedDirtyPaths: string[];
   conflictPaths: string[];
@@ -49,26 +50,15 @@ export class SyncPlanner {
     remoteChanges: RemoteChange[];
     localSnapshots: LocalSnapshotEntry[];
     now: Date;
+    streamRemoteOnly?: boolean;
   }): Promise<SyncPlan> {
     const nextTrackedFiles = cloneIndex(input.trackedFiles);
     const dirtyPaths = new Set(input.dirtyEntries.map((entry) => entry.path));
     const localSnapshotPaths = new Set(input.localSnapshots.map((snapshot) => snapshot.path));
     const remoteChangedPaths = remoteChangedPathSet(input.remoteChanges);
-    const materializeWithoutCommit: MaterializeOperation[] = [];
 
-    for (const change of input.remoteChanges) {
-      if (isTouchedByLocalSnapshot(change, localSnapshotPaths)) {
-        continue;
-      }
-      await materializeRemoteOnlyChange(
-        change,
-        input.remoteSha,
-        nextTrackedFiles,
-        materializeWithoutCommit,
-        this.getRemoteVersion,
-      );
-    }
-
+    // Decision phase reads no remote bytes for the pure remote-only case; for
+    // snapshot-remote-changed paths it reads only the bounded set of snapshots.
     const remoteVersions = await this.remoteVersionsForSnapshots(
       input.localSnapshots,
       input.remoteSha,
@@ -81,7 +71,6 @@ export class SyncPlanner {
       now: input.now,
       deviceName: this.deviceName,
     });
-
     const actions = await this.withOptimisticLocks(
       conflictPlan.commitActions,
       input.remoteSha,
@@ -94,19 +83,54 @@ export class SyncPlanner {
     );
     applyIndexMutations(nextTrackedFiles, conflictPlan.nextIndexMutations);
 
+    const acknowledgedDirtyPaths = input.localSnapshots
+      .map((snapshot) => snapshot.path)
+      .filter((path) => dirtyPaths.has(path));
+
+    const isRemoteOnly = input.streamRemoteOnly === true && actions.length === 0;
+    if (isRemoteOnly) {
+      // No commit to create: hand the full ordered remote-change set to the
+      // streaming applier. No file bytes are downloaded or buffered here; the
+      // applier materializes and builds the index in bounded chunks.
+      return {
+        basedOnRemoteSha: input.remoteSha,
+        actions: [],
+        materializeAfterCommit: [],
+        materializeWithoutCommit: [],
+        streamChanges: input.remoteChanges,
+        nextTrackedFiles,
+        acknowledgedDirtyPaths,
+        conflictPaths: conflictPlan.conflictPaths,
+      };
+    }
+
+    // Non-streaming materialization (preserves pre-streaming behavior exactly,
+    // so planForActualCreatedCommit and callers that do not opt into streaming
+    // keep their current contract). The bulk loop runs here and mutates
+    // nextTrackedFiles; it is disjoint from snapshot/conflict index mutations.
+    const bulk: MaterializeOperation[] = [];
+    for (const change of input.remoteChanges) {
+      if (isTouchedByLocalSnapshot(change, localSnapshotPaths)) {
+        continue;
+      }
+      await materializeRemoteOnlyChange(
+        change,
+        input.remoteSha,
+        nextTrackedFiles,
+        bulk,
+        this.getRemoteVersion,
+      );
+    }
+    bulk.push(...conflictPlan.materializeOperations);
+
     return {
       basedOnRemoteSha: input.remoteSha,
       actions,
-      materializeAfterCommit: actions.length > 0
-        ? [...materializeWithoutCommit, ...conflictPlan.materializeOperations]
-        : [],
-      materializeWithoutCommit: actions.length > 0
-        ? []
-        : [...materializeWithoutCommit, ...conflictPlan.materializeOperations],
+      materializeAfterCommit: actions.length > 0 ? bulk : [],
+      materializeWithoutCommit: actions.length > 0 ? [] : bulk,
+      streamChanges: [],
       nextTrackedFiles,
-      acknowledgedDirtyPaths: input.localSnapshots
-        .map((snapshot) => snapshot.path)
-        .filter((path) => dirtyPaths.has(path)),
+      acknowledgedDirtyPaths,
       conflictPaths: conflictPlan.conflictPaths,
     };
   }
