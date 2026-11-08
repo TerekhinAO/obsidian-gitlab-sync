@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GitLabClient } from "../../src/gitlab/client";
+import { GitLabRequestScheduler } from "../../src/gitlab/request-scheduler";
 import { BootstrapService } from "../../src/sync/bootstrap-service";
 import { SyncManager } from "../../src/sync/sync-manager";
 import { StateStore } from "../../src/sync/state-store";
@@ -285,6 +286,107 @@ describe("GitLab sync integration", () => {
     expect(setup.server.fileText("notes/0042.md")).toBe("dirty local");
     await expectNoMetadata(setup);
   }, 20_000);
+
+  it("completes a large throttled remote update with paced requests", async () => {
+    const remoteFiles: Record<string, string> = {};
+    for (let index = 0; index < 120; index += 1) {
+      remoteFiles[`batch/${String(index).padStart(3, "0")}.md`] = `content ${index}`;
+    }
+    const setup = await initializedFixture({ "seed.md": "seed" });
+    setup.server.requests.length = 0;
+    await setup.server.desktopCommit(remoteFiles);
+
+    let fakeNow = 0;
+    const scheduler = new GitLabRequestScheduler({
+      now: () => fakeNow,
+      sleep: async (milliseconds: number) => {
+        fakeNow += milliseconds;
+      },
+    });
+    // Throttle the fifth request — the third raw file fetch in the sequence.
+    setup.server.rateLimitRequest(5, 7);
+
+    const result = await setup.manager({
+      now: () => fakeNow,
+      sleep: async () => undefined,
+      createRequestScheduler: () => scheduler,
+    }).sync("startup");
+
+    expect(result.status).toBe("success");
+    const state = (await setup.store.load()).state;
+    expect(state.lastSyncedCommitSha).toBe(setup.server.head);
+    expect(setup.server.requests.some(isArchiveRequest)).toBe(false);
+    for (const [path, content] of Object.entries(remoteFiles)) {
+      expect(setup.vault.text(path)).toBe(content);
+    }
+    // 120 raw fetches (+ branch, compare, one 429 retry) paced at 750ms each.
+    expect(fakeNow).toBeGreaterThanOrEqual(120 * 750);
+    await expectNoMetadata(setup);
+  }, 30_000);
+
+  it("recovers a single raw transport failure without creating a commit", async () => {
+    const setup = await initializedFixture({ "seed.md": "seed" });
+    setup.server.requests.length = 0;
+    await setup.server.desktopCommit({ "target.md": "target content" });
+    setup.server.failTransportOnce(
+      (request) =>
+        request.url.includes("/repository/files/") &&
+        request.url.includes("/raw?") &&
+        request.url.includes("target.md"),
+    );
+
+    const result = await setup.manager().sync("startup");
+
+    expect(result.status).toBe("success");
+    expect(setup.vault.text("target.md")).toBe("target content");
+    expect(setup.server.commitActions).toEqual([]);
+    await expectNoMetadata(setup);
+  });
+
+  it("defers triggers until an exhausted-retry backoff expires", async () => {
+    const setup = await initializedFixture({ "seed.md": "seed" });
+    setup.server.requests.length = 0;
+    await setup.server.desktopCommit({ "target.md": "target" });
+
+    let fakeNow = 0;
+    const scheduler = new GitLabRequestScheduler({
+      now: () => fakeNow,
+      sleep: async (milliseconds: number) => {
+        fakeNow += milliseconds;
+      },
+    });
+    // Requests 3-6 are the raw fetch of target.md plus its GET retries: exhaust them.
+    for (let index = 0; index < 4; index += 1) {
+      setup.server.rateLimitRequest(3 + index, 7);
+    }
+
+    const manager = setup.manager({
+      now: () => fakeNow,
+      sleep: async () => undefined,
+      createRequestScheduler: () => scheduler,
+    });
+
+    const first = await manager.sync("startup");
+    expect(first.status).toBe("error");
+    const persisted = (await setup.store.load()).state;
+    expect(persisted.remoteBackoffUntil).not.toBeNull();
+    expect(persisted.remoteBackoffReason).toBe("rate-limit");
+    const requestsAfterExhaustion = setup.server.requests.length;
+    expect(requestsAfterExhaustion).toBeGreaterThanOrEqual(6);
+
+    // Simulate an app reload before the backoff window elapses.
+    fakeNow = 0;
+    await manager.sync("foreground");
+    await manager.sync("background");
+    expect(setup.server.requests.length).toBe(requestsAfterExhaustion);
+
+    // Once the backoff expires the next trigger resumes normally.
+    fakeNow = persisted.remoteBackoffUntil! + 1;
+    const resumed = await manager.sync("foreground");
+    expect(resumed.status).toBe("success");
+    expect(setup.vault.text("target.md")).toBe("target");
+    await expectNoMetadata(setup);
+  });
 });
 
 async function initializedFixture(initialRemoteFiles: Record<string, string | Uint8Array | ArrayBuffer>) {
@@ -304,9 +406,9 @@ async function initializedFixture(initialRemoteFiles: Record<string, string | Ui
       stateStore: store,
       settings,
       getToken: async () => server.token,
-      createGitLabClient: client,
       journal,
       now: () => 123_456,
+      sleep: async () => undefined,
       nowDate: () => conflictNow,
       logger: silentLogger,
       ...overrides,

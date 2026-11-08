@@ -46,6 +46,11 @@ export class GitLabTestServer {
   private branchReadCount = 0;
   private branchReadHooks = new Map<number, () => void | Promise<void>>();
   private compareTimeouts = new Set<string>();
+  private rateLimits: Array<{ requestNumber: number; retryAfterSeconds: number }> = [];
+  private transportFailures: Array<{
+    predicate: (request: GitLabTestRequest) => boolean;
+    hit: boolean;
+  }> = [];
 
   static async create(files: Record<string, FileContent>): Promise<GitLabTestServer> {
     const server = new GitLabTestServer();
@@ -60,6 +65,8 @@ export class GitLabTestServer {
     this.branchReadCount = 0;
     this.branchReadHooks.clear();
     this.compareTimeouts.clear();
+    this.rateLimits.length = 0;
+    this.transportFailures.length = 0;
     this.headSha = await this.createRecord([], await normalizeFiles(files));
     return this.headSha;
   }
@@ -74,6 +81,16 @@ export class GitLabTestServer {
 
   mutateBranchOnRead(readNumber: number, mutate: () => void | Promise<void>): void {
     this.branchReadHooks.set(readNumber, mutate);
+  }
+
+  /** Make the requestNumber-th authenticated request return 429 exactly once. */
+  rateLimitRequest(requestNumber: number, retryAfterSeconds: number): void {
+    this.rateLimits.push({ requestNumber, retryAfterSeconds });
+  }
+
+  /** Make the first matching request throw a transport error exactly once. */
+  failTransportOnce(predicate: (request: GitLabTestRequest) => boolean): void {
+    this.transportFailures.push({ predicate, hit: false });
   }
 
   forceCompareTimeout(from: string, to: string): void {
@@ -98,6 +115,24 @@ export class GitLabTestServer {
     this.requests.push(options);
     if (options.headers?.["PRIVATE-TOKEN"] !== this.token) {
       return { status: 401, json: { message: "invalid token" } };
+    }
+
+    const rateLimit = this.rateLimits.find(
+      (rule) => rule.requestNumber === this.requests.length,
+    );
+    if (rateLimit) {
+      return {
+        status: 429,
+        headers: { "Retry-After": String(rateLimit.retryAfterSeconds) },
+        json: { message: "rate limit exceeded" },
+      };
+    }
+
+    for (const entry of this.transportFailures) {
+      if (!entry.hit && entry.predicate(options)) {
+        entry.hit = true;
+        throw new Error("simulated transport failure");
+      }
     }
 
     const url = new URL(options.url);

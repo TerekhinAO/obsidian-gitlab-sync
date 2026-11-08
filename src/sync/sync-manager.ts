@@ -1,7 +1,7 @@
 import { normalizePath, Platform, type App, type Plugin, type Vault } from "obsidian";
 import { commitDeviceLabel, deviceLabel, type DevicePlatform } from "../device-label";
 import { GitLabClient } from "../gitlab/client";
-import type { GitLabRequestScheduler } from "../gitlab/request-scheduler";
+import { GitLabRequestScheduler } from "../gitlab/request-scheduler";
 import type {
   CreatedGitLabCommit,
   GitLabBranch,
@@ -720,6 +720,7 @@ export class SyncManager {
         await this.options.logger?.debug("GitLab archive transport", diagnostic);
       },
       sleep: this.options.sleep,
+      now: this.options.now,
       requestScheduler: this.getScheduler(),
       onBackoff: async (diagnostic) => {
         await this.options.logger?.warn("GitLab backoff", diagnostic);
