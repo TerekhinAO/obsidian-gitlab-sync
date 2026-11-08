@@ -37,19 +37,13 @@ export class GitLabRequestScheduler {
     try {
       // Re-check nextAllowedAt after every wake so a blockUntil() that arrives
       // while we are already sleeping is honored instead of starting too early.
+      // The loop only exits once now() has reached the deadline.
       for (;;) {
-        const now = this.now();
-        const waitUntil = this.nextAllowedAt;
-        const delay = waitUntil - now;
+        const delay = this.nextAllowedAt - this.now();
         if (delay <= 0) {
           break;
         }
         await this.sleep(delay);
-        // Guard against a frozen clock (test doubles): if the clock did not
-        // advance and the deadline did not move, re-sleeping would spin forever.
-        if (this.now() === now && this.nextAllowedAt === waitUntil) {
-          break;
-        }
       }
       // Use the current time, not a value captured before the (possibly delayed)
       // sleep, so an overshot timer never lets two requests start back-to-back.

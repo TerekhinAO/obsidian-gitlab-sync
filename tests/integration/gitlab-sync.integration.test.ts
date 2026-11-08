@@ -401,8 +401,17 @@ async function initializedFixture(initialRemoteFiles: Record<string, string | Ui
   const journal = journalFor(store);
   const client = () => new GitLabClient(settings, server.token, { sleep: async () => undefined });
 
-  const manager = (overrides: Partial<ConstructorParameters<typeof SyncManager>[0]> = {}): SyncManager =>
-    new SyncManager({
+  const manager = (overrides: Partial<ConstructorParameters<typeof SyncManager>[0]> = {}): SyncManager => {
+    // A monotonic clock for the shared request scheduler so pacing waits are real
+    // (fake) time, matching how the scheduler advances its own now().
+    let schedulerClock = 0;
+    const scheduler = new GitLabRequestScheduler({
+      now: () => schedulerClock,
+      sleep: async (milliseconds: number) => {
+        schedulerClock += milliseconds;
+      },
+    });
+    return new SyncManager({
       vault: vault.vault as any,
       stateStore: store,
       settings,
@@ -412,8 +421,10 @@ async function initializedFixture(initialRemoteFiles: Record<string, string | Ui
       sleep: async () => undefined,
       nowDate: () => conflictNow,
       logger: silentLogger,
+      createRequestScheduler: () => scheduler,
       ...overrides,
     });
+  };
 
   // Seed the vault via the production connect path: merge() writes remote bytes
   // into the vault, then adoptExistingVault() finalizes the tracked index and
