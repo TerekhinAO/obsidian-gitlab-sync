@@ -249,21 +249,6 @@ describe("StateStore", () => {
         projectPath: "group/project",
         branch: "main",
       },
-      plan: {
-        basedOnRemoteSha: "remote-a",
-        actions: [{
-          action: "create" as const,
-          file_path: "a.md",
-          content: "YQ==",
-          encoding: "base64" as const,
-        }],
-        materializeAfterCommit: [],
-        materializeWithoutCommit: [],
-        streamChanges: [],
-        nextTrackedFiles: { "a.md": { blobId: "blob-a", mode: "100644", size: 1 } },
-        acknowledgedDirtyPaths: ["a.md"],
-        conflictPaths: [],
-      },
       createdAt: 123,
     };
 

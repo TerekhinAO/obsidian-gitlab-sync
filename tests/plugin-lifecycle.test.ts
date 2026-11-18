@@ -164,16 +164,6 @@ describe("plugin lifecycle", () => {
         projectPath: "group/project",
         branch: "main",
       },
-      plan: {
-        basedOnRemoteSha: "remote-a",
-        actions: [],
-        materializeAfterCommit: [],
-        materializeWithoutCommit: [],
-        streamChanges: [],
-        nextTrackedFiles: {},
-        acknowledgedDirtyPaths: [],
-        conflictPaths: [],
-      },
       createdAt: 1,
     };
     await plugin.stateStore.update((data) => {
@@ -199,16 +189,6 @@ describe("plugin lifecycle", () => {
           baseUrl: "https://gitlab.com",
           projectPath: "group/project",
           branch: "main",
-        },
-        plan: {
-          basedOnRemoteSha: "remote-a",
-          actions: [],
-          materializeAfterCommit: [],
-          materializeWithoutCommit: [],
-          streamChanges: [],
-          nextTrackedFiles: {},
-          acknowledgedDirtyPaths: [],
-          conflictPaths: [],
         },
         createdAt: 1,
       };

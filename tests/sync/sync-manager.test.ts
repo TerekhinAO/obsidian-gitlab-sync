@@ -178,7 +178,6 @@ describe("SyncManager", () => {
       projectPath: settings.projectPath,
       branch: settings.branch,
     });
-    expect(intent?.plan.actions).toEqual(localCommitPlan("remote-a", "note.md").actions);
 
     const finalState = await fixture.store.load();
     expect(finalState.state.unconfirmedCommit).toBeNull();
@@ -243,15 +242,24 @@ describe("SyncManager", () => {
     expect((await fixture.store.load()).state.lastSyncedCommitSha).toBe("committed-before-restart");
   });
 
-  it("recovers an accepted mobile commit found behind a newer remote commit", async () => {
-    const plan = localCommitPlan("remote-a", "note.md");
+  it("reconciles an accepted mobile commit through a fresh safe plan", async () => {
     const fixture = managerFixture({
       data: initializedData({
         dirtyEntries: { "note.md": dirty("note.md") },
-        unconfirmedCommit: unconfirmedCommit(plan),
+        unconfirmedCommit: unconfirmedCommit(),
       }),
       branchHeads: ["remote-b"],
     });
+    fixture.remoteDiff.discover.mockResolvedValueOnce({
+      changes: [{ type: "update", path: "note.md" }],
+      usedFallback: false,
+    });
+    const plan = {
+      ...remoteOnlyPlan("remote-b", []),
+      nextTrackedFiles: { "note.md": tracked("mobile") },
+      acknowledgedDirtyPaths: ["note.md"],
+    };
+    fixture.planner.plan.mockResolvedValueOnce(plan);
     fixture.gitlab.listCommits.mockResolvedValueOnce([
       commitSummary("remote-b", "Sync vault from desktop", ["mobile-commit"]),
       commitSummary("mobile-commit", `Sync vault from iPhone [sync-tx:sync-tx-1]`, ["remote-a"]),
@@ -260,15 +268,15 @@ describe("SyncManager", () => {
 
     await expect(fixture.manager.sync("foreground")).resolves.toMatchObject({
       status: "success",
-      commitSha: "mobile-commit",
-      recovered: true,
+      commitSha: "remote-b",
     });
 
     expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
     expect(fixture.gitlab.listCommits).toHaveBeenCalledWith("remote-b", "1");
+    expect(fixture.streamingApplier.applyStream).toHaveBeenCalledTimes(1);
     const state = await fixture.store.load();
     expect(state.state.unconfirmedCommit).toBeNull();
-    expect(state.state.lastSyncedCommitSha).toBe("mobile-commit");
+    expect(state.state.lastSyncedCommitSha).toBe("remote-b");
     expect(state.state.trackedFiles).toEqual(plan.nextTrackedFiles);
     expect(state.state.dirtyEntries).toEqual({});
   });
@@ -276,7 +284,7 @@ describe("SyncManager", () => {
   it("clears an unconfirmed commit when history reaches the intended base without it", async () => {
     const fixture = managerFixture({
       data: initializedData({
-        unconfirmedCommit: unconfirmedCommit(localCommitPlan("remote-a", "note.md")),
+        unconfirmedCommit: unconfirmedCommit(),
       }),
     });
     fixture.gitlab.listCommits.mockResolvedValueOnce([
@@ -296,7 +304,7 @@ describe("SyncManager", () => {
   it("does not retry a commit when unconfirmed transaction ancestry is unknown", async () => {
     const fixture = managerFixture({
       data: initializedData({
-        unconfirmedCommit: unconfirmedCommit(localCommitPlan("remote-a", "note.md")),
+        unconfirmedCommit: unconfirmedCommit(),
       }),
       branchHeads: ["remote-b"],
     });
@@ -317,10 +325,7 @@ describe("SyncManager", () => {
   it("blocks unconfirmed transaction recovery when the configured target changed", async () => {
     const fixture = managerFixture({
       data: initializedData({
-        unconfirmedCommit: unconfirmedCommit(
-          localCommitPlan("remote-a", "note.md"),
-          { ...settings, branch: "other-branch" },
-        ),
+        unconfirmedCommit: unconfirmedCommit({ ...settings, branch: "other-branch" }),
       }),
       settings: { ...settings, branch: "main" },
     });
@@ -332,6 +337,25 @@ describe("SyncManager", () => {
       message: "Previous GitLab commit belongs to a different target; retry is blocked",
     });
     expect(fixture.gitlab.listCommits).not.toHaveBeenCalled();
+    expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
+  });
+
+  it("treats commit history that misses the captured branch head as unknown", async () => {
+    const fixture = managerFixture({
+      data: initializedData({ unconfirmedCommit: unconfirmedCommit() }),
+      branchHeads: ["remote-b"],
+    });
+    fixture.gitlab.listCommits.mockResolvedValueOnce([
+      commitSummary("remote-x", "stale history", ["remote-a"]),
+      commitSummary("remote-a", "base", []),
+    ]);
+
+    const result = await fixture.manager.sync("foreground");
+
+    expect(result).toMatchObject({
+      status: "error",
+      message: "Previous GitLab commit outcome is unknown; retry is blocked until history is available",
+    });
     expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
   });
 
@@ -1089,10 +1113,7 @@ function pendingTransaction(committedSha: string): PendingTransaction {
   };
 }
 
-function unconfirmedCommit(
-  plan: SyncPlan,
-  target: GitLabSyncSettings = settings,
-): UnconfirmedCommit {
+function unconfirmedCommit(target: GitLabSyncSettings = settings): UnconfirmedCommit {
   return {
     transactionId: "sync-tx-1",
     basedOnRemoteSha: "remote-a",
@@ -1101,7 +1122,6 @@ function unconfirmedCommit(
       projectPath: target.projectPath,
       branch: target.branch,
     },
-    plan,
     createdAt: 1,
   };
 }

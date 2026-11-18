@@ -4,9 +4,20 @@ export function acknowledgeTransactionDirtyEntries(
   data: PluginData,
   transaction: PendingTransaction,
 ): void {
-  const exactEntries = transaction.acknowledgedDirtyEntries;
+  acknowledgeDirtyEntries(
+    data,
+    transaction.acknowledgedDirtyEntries,
+    transaction.acknowledgedDirtyPaths,
+  );
+}
+
+export function acknowledgeDirtyEntries(
+  data: PluginData,
+  exactEntries: DirtyEntry[] | undefined,
+  legacyPaths: string[],
+): void {
   if (exactEntries === undefined) {
-    for (const path of transaction.acknowledgedDirtyPaths) {
+    for (const path of legacyPaths) {
       delete data.state.dirtyEntries[path];
     }
     return;

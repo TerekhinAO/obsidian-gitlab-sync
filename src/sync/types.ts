@@ -2,8 +2,6 @@ export type DirtyOperation = "upsert" | "delete";
 export type LogLevel = "off" | "error" | "info" | "debug";
 export type ConflictStrategy = "remote" | "local" | "auto-remote" | "auto-local";
 
-import type { SyncPlan } from "./sync-planner";
-
 export interface DirtyEntry {
   path: string;
   operation: DirtyOperation;
@@ -78,7 +76,6 @@ export interface UnconfirmedCommit {
     projectPath: string;
     branch: string;
   };
-  plan: SyncPlan;
   createdAt: number;
 }
 

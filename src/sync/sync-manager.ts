@@ -12,7 +12,7 @@ import type {
 } from "../gitlab/types";
 import type Logger from "../logger";
 import { ChangeJournal } from "./change-journal";
-import { acknowledgeTransactionDirtyEntries } from "./dirty-ack";
+import { acknowledgeDirtyEntries, acknowledgeTransactionDirtyEntries } from "./dirty-ack";
 import { IgnoreMatcher } from "./ignore-matcher";
 import { LocalMaterializer } from "./local-materializer";
 import { LocalSnapshotService, type LocalSnapshotEntry, type VersionState } from "./local-snapshot";
@@ -416,15 +416,6 @@ export class SyncManager {
           data.state.unconfirmedCommit,
           firstBranch.commit.id,
         );
-        if (outcome.status === "found") {
-          return await this.recoverFoundUnconfirmedCommit(
-            data.state.unconfirmedCommit,
-            outcome.commit,
-            client,
-            settings,
-            trigger,
-          );
-        }
         if (outcome.status === "unknown") {
           throw new Error(
             "Previous GitLab commit outcome is unknown; retry is blocked until history is available",
@@ -432,6 +423,9 @@ export class SyncManager {
         }
 
         await this.options.stateStore.update((next) => {
+          // Both a found marker and a proven-absent marker are safe to clear:
+          // the normal plan below re-reads the current branch and resolves every
+          // dirty path against actual remote content instead of replaying stale bytes.
           next.state.unconfirmedCommit = null;
         });
         data = await this.options.stateStore.load();
@@ -550,7 +544,6 @@ export class SyncManager {
           projectPath: input.settings.projectPath,
           branch: input.settings.branch,
         },
-        plan: clonePlan(plan),
         createdAt: this.now(),
       });
 
@@ -645,6 +638,9 @@ export class SyncManager {
       if (commits.length === 0) {
         return { status: "unknown" };
       }
+      if (page === 1 && commits[0]?.id !== headSha) {
+        return { status: "unknown" };
+      }
 
       for (const commit of commits) {
         if (transactionIdFromMessage(commit.message) === intent.transactionId) {
@@ -657,45 +653,6 @@ export class SyncManager {
     }
 
     return { status: "unknown" };
-  }
-
-  private async recoverFoundUnconfirmedCommit(
-    intent: UnconfirmedCommit,
-    remoteCommit: GitLabCommitSummary,
-    client: GitLabClientLike,
-    settings: GitLabSyncSettings,
-    trigger: SyncTrigger,
-  ): Promise<SyncResult> {
-    let finalizedPlan = intent.plan;
-    if (!remoteCommit.parent_ids.includes(intent.plan.basedOnRemoteSha)) {
-      finalizedPlan = await this.planForActualCreatedCommit(
-        client,
-        settings,
-        intent.basedOnRemoteSha,
-        {
-          id: remoteCommit.id,
-          parent_ids: remoteCommit.parent_ids,
-        },
-        intent.plan,
-        this.memoizedRemoteVersion(client),
-      );
-    }
-
-    const transaction = this.pendingTransaction(remoteCommit.id, finalizedPlan);
-    await this.persistPendingTransaction(transaction);
-    const recovered = await this.getMaterializer().recoverPendingTransaction();
-    if (!recovered) {
-      throw new Error("Failed to recover confirmed GitLab commit transaction");
-    }
-
-    return {
-      status: transaction.conflictPaths.length > 0 ? "conflict" : "success",
-      trigger,
-      message: "Recovered pending sync",
-      commitSha: remoteCommit.id,
-      recovered: true,
-      attempts: 1,
-    };
   }
 
   private async applyRemoteOnlyPlan(
@@ -725,9 +682,11 @@ export class SyncManager {
     await this.options.stateStore.update((data) => {
       data.state.lastSyncedCommitSha = remoteSha;
       data.state.trackedFiles = cloneTrackedFiles(finalIndex);
-      for (const path of plan.acknowledgedDirtyPaths) {
-        delete data.state.dirtyEntries[normalizePath(path)];
-      }
+      acknowledgeDirtyEntries(
+        data,
+        plan.acknowledgedDirtyEntries,
+        plan.acknowledgedDirtyPaths,
+      );
       data.state.pendingTransaction = null;
       data.state.lastSyncAt = this.now();
       data.state.lastSyncResult = plan.conflictPaths.length > 0 ? "conflict" : "success";
@@ -1169,12 +1128,16 @@ export class SyncManager {
   }
 
   private newTransactionId(): string {
-    return `${this.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    return globalThis.crypto?.randomUUID?.() ??
+      `${this.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   }
 
   private async persistUnconfirmedCommit(intent: UnconfirmedCommit): Promise<void> {
     await this.options.stateStore.update((data) => {
-      data.state.unconfirmedCommit = clonePlanIntent(intent);
+      data.state.unconfirmedCommit = {
+        ...intent,
+        target: { ...intent.target },
+      };
     });
   }
 
@@ -1260,21 +1223,12 @@ function versionFromArrayBuffer(buffer: ArrayBuffer | null): VersionState {
   return { exists: true, bytes: new Uint8Array(buffer) };
 }
 
-function clonePlan(plan: SyncPlan): SyncPlan {
-  return {
-    ...plan,
-    actions: plan.actions.map((action) => ({ ...action })),
-    materializeAfterCommit: plan.materializeAfterCommit.map((operation) => ({ ...operation })),
-    materializeWithoutCommit: plan.materializeWithoutCommit.map((operation) => ({ ...operation })),
-    streamChanges: plan.streamChanges.map((change) => ({ ...change })),
-    nextTrackedFiles: cloneTrackedFiles(plan.nextTrackedFiles),
-    acknowledgedDirtyPaths: [...plan.acknowledgedDirtyPaths],
-    conflictPaths: [...plan.conflictPaths],
-  };
-}
-
 function transactionIdFromMessage(message: string): string | null {
-  return message.match(/\[sync-tx:([a-z0-9-]+)\]/i)?.[1] ?? null;
+  const markers = message.match(/\[sync-tx:[a-z0-9-]+\]/gi);
+  if (markers === null || markers.length !== 1) {
+    return null;
+  }
+  return markers[0].match(/\[sync-tx:([a-z0-9-]+)\]/i)?.[1] ?? null;
 }
 
 function sameGitLabTarget(
@@ -1284,13 +1238,6 @@ function sameGitLabTarget(
   return target.baseUrl === settings.gitlabBaseUrl &&
     target.projectPath === settings.projectPath &&
     target.branch === settings.branch;
-}
-
-function clonePlanIntent(intent: UnconfirmedCommit): UnconfirmedCommit {
-  return {
-    ...intent,
-    plan: clonePlan(intent.plan),
-  };
 }
 
 function cloneTrackedFiles(
