@@ -714,7 +714,7 @@ function mergeTextVersions(
     return null;
   }
 
-  const mergedEdits = [...remoteEdits, ...localEdits]
+  const mergedEdits = dedupeTextEdits([...remoteEdits, ...localEdits])
     .sort((left, right) => left.start - right.start || left.end - right.end);
   const mergedLines: string[] = [];
   let cursor = 0;
@@ -742,6 +742,22 @@ interface TextEdit {
   start: number;
   end: number;
   lines: string[];
+}
+
+function dedupeTextEdits(edits: TextEdit[]): TextEdit[] {
+  const seen = new Set<string>();
+  const unique: TextEdit[] = [];
+
+  for (const edit of edits) {
+    const key = JSON.stringify([edit.start, edit.end, edit.lines]);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(edit);
+  }
+
+  return unique;
 }
 
 function diffTextEdits(baseLines: string[], changedLines: string[]): TextEdit[] {

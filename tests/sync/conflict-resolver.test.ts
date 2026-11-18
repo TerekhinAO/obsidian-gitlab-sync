@@ -532,6 +532,36 @@ describe("ConflictResolver", () => {
     expect(plan.conflictPaths).toEqual([]);
   });
 
+  it("applies identical independent insertions only once", async () => {
+    const plan = await new ConflictResolver({ strategy: "auto-remote" }).resolve({
+      snapshots: [snapshot(
+        "note.md",
+        present(["a", "b"].join("\n")),
+        present("a"),
+      )],
+      remote: {
+        "note.md": present(["X", "a", "b"].join("\n")),
+      },
+      trackedFiles: {},
+      now,
+      deviceName: "iPhone",
+    });
+    const merged = ["X", "a", "b"].join("\n");
+
+    expect(plan.commitActions).toEqual([{
+      action: "update",
+      file_path: "note.md",
+      content: base64(merged),
+      encoding: "base64",
+    }]);
+    expect(plan.materializeOperations).toEqual([{
+      type: "write",
+      path: "note.md",
+      contentBase64: base64(merged),
+    }]);
+    expect(plan.conflictPaths).toEqual([]);
+  });
+
   it("falls back to local when auto-merge text changes overlap", async () => {
     const plan = await new ConflictResolver({ strategy: "auto-local" }).resolve({
       snapshots: [snapshot("note.md", present("local line"), present("base line"))],
