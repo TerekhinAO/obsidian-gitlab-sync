@@ -1,5 +1,5 @@
 import { Notice, Plugin } from "obsidian";
-import { DEFAULT_STATE, type GitLabSyncSettings, type PluginData } from "./settings/settings";
+import type { GitLabSyncSettings, PluginData } from "./settings/settings";
 import GitLabSyncSettingsTab from "./settings/settings-tab";
 import Logger from "./logger";
 import { StateStore } from "./sync/state-store";
@@ -54,7 +54,6 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
       vault: this.app.vault,
       plugin: this,
       stateStore: this.stateStore,
-      settings: this.settings,
       logger: this.logger,
       createProgressNotice: (message) => {
         const notice = new Notice(message, 0);
@@ -279,22 +278,7 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
   }
 
   async reset() {
-    const current = await this.stateStore.load();
-    if (
-      current.state.unconfirmedCommit !== null ||
-      current.state.pendingTransaction !== null
-    ) {
-      throw new Error("Cannot reset sync state while a commit outcome is unresolved");
-    }
-
-    await this.stateStore.update((data) => {
-      data.state = {
-        ...DEFAULT_STATE,
-        trackedFiles: {},
-        dirtyEntries: {},
-        unconfirmedCommit: null,
-      };
-    });
+    await this.syncManager.resetState();
     this.pluginData = await this.stateStore.load();
     this.settings = this.pluginData.settings;
   }

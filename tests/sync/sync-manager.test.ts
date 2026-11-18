@@ -258,24 +258,39 @@ describe("SyncManager", () => {
     expect(fixture.manager.isSyncing()).toBe(false);
   });
 
-  it("reconciles an accepted mobile commit through a fresh safe plan", async () => {
+  it("refuses state reset while a sync holds the manager lock", async () => {
+    const fixture = managerFixture({ data: initializedData() });
+    let releaseBranch!: (value: GitLabBranch) => void;
+    fixture.gitlab.getBranch.mockImplementationOnce(
+      () => new Promise<GitLabBranch>((resolve) => {
+        releaseBranch = resolve;
+      }),
+    );
+    const syncing = fixture.manager.sync("manual");
+    await vi.waitFor(() => expect(fixture.manager.isSyncing()).toBe(true));
+    await vi.waitFor(() => expect(fixture.gitlab.getBranch).toHaveBeenCalled());
+
+    await expect(fixture.manager.resetState()).rejects.toThrow(
+      "Cannot reset sync state while sync is running",
+    );
+
+    releaseBranch(branch("remote-a", true));
+    await expect(syncing).resolves.toMatchObject({ status: "success" });
+  });
+
+  it("recovers an accepted mobile commit behind a newer remote commit", async () => {
     const fixture = managerFixture({
       data: initializedData({
         dirtyEntries: { "note.md": dirty("note.md") },
-        unconfirmedCommit: unconfirmedCommit(),
+        unconfirmedCommit: unconfirmedCommit(settings, [dirty("note.md")]),
       }),
       branchHeads: ["remote-b"],
     });
     fixture.remoteDiff.discover.mockResolvedValueOnce({
       changes: [{ type: "update", path: "note.md" }],
+      remoteTree: { "note.md": tracked("mobile") },
       usedFallback: false,
     });
-    const plan = {
-      ...remoteOnlyPlan("remote-b", []),
-      nextTrackedFiles: { "note.md": tracked("mobile") },
-      acknowledgedDirtyPaths: ["note.md"],
-    };
-    fixture.planner.plan.mockResolvedValueOnce(plan);
     fixture.gitlab.listCommits.mockResolvedValueOnce([
       commitSummary("remote-b", "Sync vault from desktop", ["mobile-commit"]),
       commitSummary("mobile-commit", `Sync vault from iPhone [sync-tx:sync-tx-1]`, ["remote-a"]),
@@ -284,17 +299,102 @@ describe("SyncManager", () => {
 
     await expect(fixture.manager.sync("foreground")).resolves.toMatchObject({
       status: "success",
-      commitSha: "remote-b",
+      commitSha: "mobile-commit",
+      recovered: true,
     });
 
     expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
+    expect(fixture.planner.plan).not.toHaveBeenCalled();
     expect(fixture.gitlab.listCommits).toHaveBeenCalledWith("remote-b", "1");
-    expect(fixture.streamingApplier.applyStream).toHaveBeenCalledTimes(1);
     const state = await fixture.store.load();
     expect(state.state.unconfirmedCommit).toBeNull();
-    expect(state.state.lastSyncedCommitSha).toBe("remote-b");
-    expect(state.state.trackedFiles).toEqual(plan.nextTrackedFiles);
+    expect(state.state.lastSyncedCommitSha).toBe("mobile-commit");
+    expect(state.state.trackedFiles).toEqual({ "note.md": tracked("mobile") });
     expect(state.state.dirtyEntries).toEqual({});
+  });
+
+  it("materializes a found accepted commit without planning a second commit", async () => {
+    const capturedEntry = dirty("note.md");
+    const conflictPath = "note — conflict iPhone.md";
+    const remoteTree = {
+      "note.md": tracked("remote"),
+      [conflictPath]: tracked("conflict"),
+    };
+    const fixture = managerFixture({
+      data: initializedData({
+        dirtyEntries: { "note.md": capturedEntry },
+        unconfirmedCommit: unconfirmedCommit(settings, [capturedEntry]),
+      }),
+      branchHeads: ["mobile-commit"],
+    });
+    fixture.gitlab.listCommits.mockResolvedValueOnce([
+      commitSummary(
+        "mobile-commit",
+        "Sync vault from iPhone [sync-tx:sync-tx-1]",
+        ["remote-a"],
+      ),
+      commitSummary("remote-a", "base", []),
+    ]);
+    fixture.remoteDiff.discover.mockResolvedValueOnce({
+      changes: [
+        { type: "update", path: "note.md" },
+        { type: "create", path: conflictPath },
+      ],
+      remoteTree,
+      usedFallback: false,
+    });
+
+    const result = await fixture.manager.sync("foreground");
+
+    expect(result).toMatchObject({
+      status: "success",
+      commitSha: "mobile-commit",
+      recovered: true,
+    });
+    expect(fixture.planner.plan).not.toHaveBeenCalled();
+    expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
+    expect(fixture.streamingApplier.applyStream).toHaveBeenCalledWith(
+      expect.objectContaining({ remoteSha: "mobile-commit" }),
+    );
+    const state = await fixture.store.load();
+    expect(state.state.unconfirmedCommit).toBeNull();
+    expect(state.state.lastSyncedCommitSha).toBe("mobile-commit");
+    expect(state.state.trackedFiles).toEqual(remoteTree);
+    expect(state.state.dirtyEntries).toEqual({});
+  });
+
+  it("skips found-commit materialization for a path edited after its captured dirty revision", async () => {
+    const capturedEntry = dirty("note.md");
+    const postSnapshotEntry = { ...capturedEntry, recordedAt: capturedEntry.recordedAt + 1 };
+    const fixture = managerFixture({
+      data: initializedData({
+        dirtyEntries: { "note.md": postSnapshotEntry },
+        unconfirmedCommit: unconfirmedCommit(settings, [capturedEntry]),
+      }),
+      branchHeads: ["mobile-commit"],
+    });
+    fixture.gitlab.listCommits.mockResolvedValueOnce([
+      commitSummary("mobile-commit", "marker [sync-tx:sync-tx-1]", ["remote-a"]),
+    ]);
+    fixture.remoteDiff.discover.mockResolvedValueOnce({
+      changes: [{ type: "update", path: "note.md" }],
+      remoteTree: { "note.md": tracked("remote") },
+      usedFallback: false,
+    });
+
+    await expect(fixture.manager.sync("foreground")).resolves.toMatchObject({
+      status: "success",
+      commitSha: "mobile-commit",
+      recovered: true,
+    });
+
+    expect(fixture.streamingApplier.applyStream).toHaveBeenCalledWith(
+      expect.objectContaining({ changes: [] }),
+    );
+    const state = await fixture.store.load();
+    expect(state.state.dirtyEntries["note.md"]).toEqual(postSnapshotEntry);
+    expect(state.state.lastSyncedCommitSha).toBe("mobile-commit");
+    expect(state.state.trackedFiles).toEqual({ "note.md": tracked("remote") });
   });
 
   it("clears an unconfirmed commit when history reaches the intended base without it", async () => {
@@ -848,6 +948,7 @@ function managerFixture(options: {
   canPush?: boolean;
   remoteChanges?: RemoteChange[];
   remoteTree?: any[];
+  remoteDiffTree?: Record<string, TrackedFile>;
   localFiles?: Record<string, string>;
   remoteFiles?: Record<string, string>;
   repositoryFiles?: Record<string, GitLabRepositoryFile>;
@@ -946,8 +1047,13 @@ function managerFixture(options: {
     createCommit: vi.fn(async () => commit("commit-a", ["remote-a"])),
   };
   const remoteDiff = {
-    discover: vi.fn(async () => ({
+    discover: vi.fn(async (): Promise<{
+      changes: RemoteChange[];
+      remoteTree?: Record<string, TrackedFile>;
+      usedFallback: boolean;
+    }> => ({
       changes: options.remoteChanges ?? [],
+      remoteTree: options.remoteDiffTree,
       usedFallback: false,
     })),
   };
@@ -1129,7 +1235,10 @@ function pendingTransaction(committedSha: string): PendingTransaction {
   };
 }
 
-function unconfirmedCommit(target: GitLabSyncSettings = settings): UnconfirmedCommit {
+function unconfirmedCommit(
+  target: GitLabSyncSettings = settings,
+  capturedDirtyEntries: DirtyEntry[] = [],
+): UnconfirmedCommit {
   return {
     transactionId: "sync-tx-1",
     basedOnRemoteSha: "remote-a",
@@ -1138,6 +1247,7 @@ function unconfirmedCommit(target: GitLabSyncSettings = settings): UnconfirmedCo
       projectPath: target.projectPath,
       branch: target.branch,
     },
+    capturedDirtyEntries,
     createdAt: 1,
   };
 }

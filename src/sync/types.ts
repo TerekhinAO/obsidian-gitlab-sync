@@ -76,6 +76,7 @@ export interface UnconfirmedCommit {
     projectPath: string;
     branch: string;
   };
+  capturedDirtyEntries?: DirtyEntry[];
   createdAt: number;
 }
 

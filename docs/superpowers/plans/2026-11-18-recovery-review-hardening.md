@@ -1,6 +1,6 @@
 # Recovery Review Hardening Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Close the three remaining review findings without reintroducing stale-plan recovery.
 
@@ -22,21 +22,21 @@
 
 ### Task 1: Found-commit materialization
 
-- [ ] Add a failing test proving a found accepted commit with a conflict-copy action is materialized from GitLab and does not invoke the planner or `createCommit`.
-- [ ] Store content-less captured dirty revisions in `UnconfirmedCommit`.
-- [ ] Recover the actual found commit by applying its base-to-commit changes through the streaming applier, skipping currently changed dirty paths.
-- [ ] Finalize the found commit and exact unchanged dirty revisions.
+- [x] Add a failing test proving a found accepted commit with a conflict-copy action is materialized from GitLab and does not invoke the planner or `createCommit`.
+- [x] Store content-less captured dirty revisions in `UnconfirmedCommit`.
+- [x] Recover the actual found commit by applying its base-to-commit changes through the streaming applier, skipping currently changed dirty paths.
+- [x] Finalize the found commit and exact unchanged dirty revisions.
 
 ### Task 2: Production settings freshness
 
-- [ ] Add a failing lifecycle test showing `SyncManager` continues using the saved branch after `saveSettings()`.
-- [ ] Stop passing the mutable settings object from production plugin construction.
+- [x] Add a failing lifecycle test showing `SyncManager` continues using the saved branch after `saveSettings()`.
+- [x] Stop passing the mutable settings object from production plugin construction.
 
 ### Task 3: Atomic reset
 
-- [ ] Add a failing race test where intent appears between reset's read and update.
-- [ ] Move reset under the manager lock and check intent inside `StateStore.update`.
+- [x] Add a failing race test where intent appears between reset's read and update.
+- [x] Move reset under the manager lock and check intent inside `StateStore.update`.
 
 ### Task 4: Verification
 
-- [ ] Run tests, typecheck, lint, production build, and diff check.
+- [x] Run tests, typecheck, lint, production build, and diff check.

@@ -60,7 +60,7 @@ class TestPlugin extends GitLabGitlessSyncPlugin {
   }
 
   async loadData() {
-    return this.data;
+    return this.data === null ? null : structuredClone(this.data);
   }
 
   async saveData(data: any) {
@@ -178,9 +178,23 @@ describe("plugin lifecycle", () => {
     expect(saved.state.unconfirmedCommit).toEqual(intent);
   });
 
+  it("keeps SyncManager on persisted settings after settings are saved", async () => {
+    const plugin = new TestPlugin(fakePluginData(), fakeApp(() => undefined));
+    vi.spyOn(SyncManager.prototype, "startEventsListener").mockImplementation(() => undefined);
+    vi.spyOn(SyncManager.prototype, "recoverIfNeeded").mockResolvedValue(false);
+    await plugin.onload();
+
+    plugin.settings.branch = "second";
+    await plugin.saveSettings();
+
+    const managerSettings = (plugin.syncManager as any).options.settings;
+    expect(managerSettings).toBeUndefined();
+    expect((await plugin.stateStore.load()).settings.branch).toBe("second");
+  });
+
   it("refuses reset while an unconfirmed commit intent is active", async () => {
     const plugin = new TestPlugin(fakePluginData(), fakeApp(() => undefined));
-    await plugin.loadSettings();
+    await plugin.onload();
     await plugin.stateStore.update((data) => {
       data.state.unconfirmedCommit = {
         transactionId: "sync-tx-1",
@@ -193,6 +207,35 @@ describe("plugin lifecycle", () => {
         createdAt: 1,
       };
     });
+
+    await expect(plugin.reset()).rejects.toThrow(
+      "Cannot reset sync state while a commit outcome is unresolved",
+    );
+    expect((await plugin.stateStore.load()).state.unconfirmedCommit).not.toBeNull();
+  });
+
+  it("refuses reset when an intent appears between the reset check and state update", async () => {
+    const plugin = new TestPlugin(fakePluginData(), fakeApp(() => undefined));
+    await plugin.onload();
+    const originalUpdate = plugin.stateStore.update.bind(plugin.stateStore);
+    let injected = false;
+    plugin.stateStore.update = async (mutator: (data: any) => void | Promise<void>) =>
+      {
+        if (!injected) {
+          injected = true;
+          (plugin as any).data.state.unconfirmedCommit = {
+            transactionId: "sync-tx-race",
+            basedOnRemoteSha: "remote-a",
+            target: {
+              baseUrl: "https://gitlab.com",
+              projectPath: "group/project",
+              branch: "main",
+            },
+            createdAt: 1,
+          };
+        }
+        return await originalUpdate(mutator);
+      };
 
     await expect(plugin.reset()).rejects.toThrow(
       "Cannot reset sync state while a commit outcome is unresolved",

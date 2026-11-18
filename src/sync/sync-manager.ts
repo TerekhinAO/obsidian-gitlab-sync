@@ -12,13 +12,18 @@ import type {
 } from "../gitlab/types";
 import type Logger from "../logger";
 import { ChangeJournal } from "./change-journal";
-import { acknowledgeDirtyEntries, acknowledgeTransactionDirtyEntries } from "./dirty-ack";
+import {
+  acknowledgeDirtyEntries,
+  acknowledgeTransactionDirtyEntries,
+  sameDirtyEntry,
+} from "./dirty-ack";
 import { IgnoreMatcher } from "./ignore-matcher";
 import { LocalMaterializer } from "./local-materializer";
 import { LocalSnapshotService, type LocalSnapshotEntry, type VersionState } from "./local-snapshot";
 import { calculateGitBlobId, toBase64 } from "./conflict-resolver";
 import { RemoteDiffService, type RemoteChange, type RemoteDiffClient } from "./remote-diff";
 import { StateStore } from "./state-store";
+import { DEFAULT_STATE } from "../settings/settings";
 import { SyncPlanner, type SyncPlan } from "./sync-planner";
 import { StreamingRemoteApplier } from "./remote-only-stream";
 import type {
@@ -228,6 +233,32 @@ export class SyncManager {
     return await this.getMaterializer().recoverPendingTransaction();
   }
 
+  async resetState(): Promise<void> {
+    if (this.syncing) {
+      throw new Error("Cannot reset sync state while sync is running");
+    }
+
+    this.syncing = true;
+    try {
+      await this.options.stateStore.update((data) => {
+        if (
+          data.state.unconfirmedCommit !== null ||
+          data.state.pendingTransaction !== null
+        ) {
+          throw new Error("Cannot reset sync state while a commit outcome is unresolved");
+        }
+        data.state = {
+          ...DEFAULT_STATE,
+          trackedFiles: {},
+          dirtyEntries: {},
+          unconfirmedCommit: null,
+        };
+      });
+    } finally {
+      this.syncing = false;
+    }
+  }
+
   async adoptExistingVault(): Promise<{
     status: "success" | "error" | "already-running";
     message: string;
@@ -434,6 +465,16 @@ export class SyncManager {
             "Previous GitLab commit outcome is unknown; retry is blocked until history is available",
           );
         }
+        if (outcome.status === "found") {
+          return await this.recoverFoundCommitFromRemote(
+            data,
+            data.state.unconfirmedCommit,
+            outcome.commit,
+            client,
+            trigger,
+            progress,
+          );
+        }
 
         await this.options.stateStore.update((next) => {
           // Both a found marker and a proven-absent marker are safe to clear:
@@ -557,6 +598,7 @@ export class SyncManager {
           projectPath: input.settings.projectPath,
           branch: input.settings.branch,
         },
+        capturedDirtyEntries: plan.acknowledgedDirtyEntries?.map((entry) => ({ ...entry })),
         createdAt: this.now(),
       });
 
@@ -666,6 +708,74 @@ export class SyncManager {
     }
 
     return { status: "unknown" };
+  }
+
+  private async recoverFoundCommitFromRemote(
+    data: PluginData,
+    intent: UnconfirmedCommit,
+    remoteCommit: GitLabCommitSummary,
+    client: GitLabClientLike,
+    trigger: SyncTrigger,
+    progress?: ProgressNotice,
+  ): Promise<SyncResult> {
+    this.setProgress(progress, "Updating local vault…");
+    const remoteDiff = this.createRemoteDiffService(client);
+    const actual = await remoteDiff.discover({
+      baseSha: intent.basedOnRemoteSha,
+      remoteSha: remoteCommit.id,
+      baseIndex: data.state.trackedFiles,
+    });
+    const captured = new Map(
+      (intent.capturedDirtyEntries ?? []).map((entry) => [entry.path, entry]),
+    );
+    const changes = actual.changes.filter((change) => {
+      const paths = change.type === "rename"
+        ? [change.oldPath, change.newPath]
+        : [change.path];
+      return paths.every((path) => {
+        const current = data.state.dirtyEntries[normalizePath(path)];
+        const expected = captured.get(path);
+        return current === undefined ||
+          (expected !== undefined && sameDirtyEntry(current, expected));
+      });
+    });
+
+    const appliedIndex = await this.getJournal().suppress(async () => {
+      const applier = this.getStreamingApplier(client);
+      return await applier.applyStream({
+        changes,
+        remoteSha: remoteCommit.id,
+        baseIndex: actual.remoteTree ?? data.state.trackedFiles,
+      });
+    });
+    const finalIndex = actual.remoteTree ?? appliedIndex;
+
+    await this.options.stateStore.update((next) => {
+      next.state.lastSyncedCommitSha = remoteCommit.id;
+      next.state.trackedFiles = cloneTrackedFiles(finalIndex);
+      acknowledgeDirtyEntries(
+        next,
+        intent.capturedDirtyEntries ?? [],
+        [],
+      );
+      next.state.unconfirmedCommit = null;
+      next.state.pendingTransaction = null;
+      next.state.lastSyncAt = this.now();
+      next.state.lastSyncResult = "success";
+      next.state.remoteBackoffUntil = null;
+      next.state.remoteBackoffReason = null;
+      next.state.remoteApply = null;
+    });
+
+    this.setProgress(progress, "Sync complete");
+    return {
+      status: "success",
+      trigger,
+      message: "Recovered pending sync",
+      commitSha: remoteCommit.id,
+      recovered: true,
+      attempts: 1,
+    };
   }
 
   private async applyRemoteOnlyPlan(
