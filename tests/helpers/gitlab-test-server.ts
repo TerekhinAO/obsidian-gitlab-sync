@@ -183,6 +183,32 @@ export class GitLabTestServer {
         : { status: 404, json: { message: "404 File Not Found" } };
     }
 
+    if (method === "GET" && path.startsWith("/repository/files/")) {
+      const encodedPath = path.slice("/repository/files/".length);
+      const filePath = decodeURIComponent(encodedPath);
+      const ref = required(url.searchParams.get("ref"), "ref");
+      const content = this.commit(ref).files.get(filePath);
+      if (!content) {
+        return { status: 404, json: { message: "404 File Not Found" } };
+      }
+      const blobId = await calculateGitBlobId(content);
+      return {
+        status: 200,
+        json: {
+          file_name: filePath.split("/").pop() ?? filePath,
+          file_path: filePath,
+          size: content.byteLength,
+          encoding: "base64",
+          content: Buffer.from(content).toString("base64"),
+          content_sha256: blobId,
+          ref,
+          blob_id: blobId,
+          commit_id: ref,
+          last_commit_id: this.fileLastCommit(ref, filePath) ?? ref,
+        },
+      };
+    }
+
     if (method === "GET" && path.startsWith("/repository/blobs/") && path.endsWith("/raw")) {
       const blobId = decodeURIComponent(
         path.slice("/repository/blobs/".length, -"/raw".length),
@@ -225,6 +251,28 @@ export class GitLabTestServer {
     return content ? new TextDecoder().decode(content) : null;
   }
 
+  private fileLastCommit(ref: string, filePath: string): string | null {
+    const target = this.commit(ref).files.get(filePath);
+    if (!target) {
+      return null;
+    }
+
+    for (const commit of this.commits.values()) {
+      const content = commit.files.get(filePath);
+      const parentContent = commit.parentIds[0]
+        ? this.commits.get(commit.parentIds[0])?.files.get(filePath)
+        : undefined;
+      if (
+        content &&
+        sameBytes(content, target) &&
+        (parentContent === undefined || !sameBytes(parentContent, content))
+      ) {
+        return commit.id;
+      }
+    }
+    return null;
+  }
+
   hasPathEndingWithMetadata(): boolean {
     return this.allPaths().some(isMetadataPath) ||
       this.commitActions.flat().some((action) => isMetadataPath(action.file_path));
@@ -246,6 +294,17 @@ export class GitLabTestServer {
     const parent = this.current();
     const files = cloneFiles(parent.files);
     for (const action of payload.actions) {
+      if (action.action !== "create") {
+        const expectedLastCommitId = this.fileLastCommit(parent.id, action.file_path);
+        if (action.last_commit_id !== expectedLastCommitId) {
+          return {
+            status: 400,
+            json: {
+              message: `last_commit_id mismatch for ${action.file_path}: expected ${expectedLastCommitId ?? "null"}`,
+            },
+          };
+        }
+      }
       if (action.action === "delete") {
         files.delete(action.file_path);
       } else {

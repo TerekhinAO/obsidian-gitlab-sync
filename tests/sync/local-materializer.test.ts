@@ -409,6 +409,33 @@ describe("LocalMaterializer", () => {
     expect(data.state.pendingTransaction).toBeNull();
   });
 
+  it("does not overwrite a dirty path edited after the transaction snapshot", async () => {
+    const pending = pendingTransaction();
+    pending.acknowledgedDirtyEntries = [
+      { path: "note.md", operation: "upsert", recordedAt: 1 },
+    ];
+    const postSnapshotEntry = { path: "note.md", operation: "upsert", recordedAt: 2 };
+    const fixture = materializer({
+      initialFiles: { "note.md": bytes("user edit") },
+      initialData: {
+        state: {
+          initialized: true,
+          lastSyncedCommitSha: "base",
+          dirtyEntries: { "note.md": postSnapshotEntry },
+          trackedFiles: {},
+          pendingTransaction: pending,
+        },
+      },
+    });
+
+    await expect(fixture.materializer.recoverPendingTransaction()).resolves.toBe(true);
+
+    expect(fixture.read("note.md")).toEqual(bytes("user edit"));
+    const data = await fixture.store.load();
+    expect(data.state.dirtyEntries["note.md"]).toEqual(postSnapshotEntry);
+    expect(data.state.lastSyncedCommitSha).toBe("commit-sha");
+  });
+
   it("reports no recovery work when there is no pending transaction", async () => {
     const fixture = materializer({});
 

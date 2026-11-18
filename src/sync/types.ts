@@ -65,6 +65,7 @@ export interface PendingTransaction {
   materializeOperations: MaterializeOperation[];
   nextTrackedFiles: Record<string, TrackedFile>;
   acknowledgedDirtyPaths: string[];
+  acknowledgedDirtyEntries?: DirtyEntry[];
   conflictPaths: string[];
   createdAt: number;
 }
@@ -72,6 +73,11 @@ export interface PendingTransaction {
 export interface UnconfirmedCommit {
   transactionId: string;
   basedOnRemoteSha: string;
+  target: {
+    baseUrl: string;
+    projectPath: string;
+    branch: string;
+  };
   plan: SyncPlan;
   createdAt: number;
 }

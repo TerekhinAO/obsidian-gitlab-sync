@@ -1,7 +1,12 @@
 import { normalizePath } from "obsidian";
 import type Logger from "../logger";
+import { acknowledgeTransactionDirtyEntries, sameDirtyEntry } from "./dirty-ack";
 import type { StateStore } from "./state-store";
-import type { ByteMaterializeOperation, MaterializeOperation } from "./types";
+import type {
+  ByteMaterializeOperation,
+  MaterializeOperation,
+  PendingTransaction,
+} from "./types";
 
 interface MaterializerVault {
   configDir: string;
@@ -73,7 +78,7 @@ export class LocalMaterializer {
       return false;
     }
 
-    await this.apply(pending.materializeOperations);
+    await this.applyTransaction(pending);
     await this.options.stateStore.update((nextData) => {
       const transaction = nextData.state.pendingTransaction;
       if (transaction === null) {
@@ -82,15 +87,25 @@ export class LocalMaterializer {
 
       nextData.state.lastSyncedCommitSha = transaction.committedSha;
       nextData.state.trackedFiles = cloneTrackedFiles(transaction.nextTrackedFiles);
-      for (const path of transaction.acknowledgedDirtyPaths) {
-        delete nextData.state.dirtyEntries[normalizePath(path)];
-      }
+      acknowledgeTransactionDirtyEntries(nextData, transaction);
       nextData.state.pendingTransaction = null;
       nextData.state.lastSyncAt = this.now();
       nextData.state.lastSyncResult = transaction.conflictPaths.length > 0 ? "conflict" : "success";
     });
 
     return true;
+  }
+
+  async applyTransaction(transaction: PendingTransaction): Promise<void> {
+    const data = await this.options.stateStore.load();
+    await this.apply(transaction.materializeOperations.filter((operation) => {
+      const acknowledged = transaction.acknowledgedDirtyEntries
+        ?.find((entry) => entry.path === normalizePath(operation.path));
+      if (acknowledged === undefined) {
+        return true;
+      }
+      return sameDirtyEntry(data.state.dirtyEntries[acknowledged.path], acknowledged);
+    }));
   }
 
   private async write(operation: MaterializeOperation): Promise<void> {

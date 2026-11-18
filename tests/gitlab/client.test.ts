@@ -168,6 +168,31 @@ describe("GitLabClient", () => {
     );
   });
 
+  it("fetches repository file metadata including its last commit", async () => {
+    fake.queue({
+      status: 200,
+      json: {
+        file_name: "note.md",
+        file_path: "notes/note.md",
+        size: 4,
+        encoding: "base64",
+        content: "bm90ZQ==",
+        content_sha256: "blob-sha",
+        ref: "remote-a",
+        blob_id: "blob-sha",
+        commit_id: "file-commit",
+        last_commit_id: "file-last-commit",
+      },
+    });
+
+    const file = await new GitLabClient(settings, "token").getFile("notes/note.md", "remote-a");
+
+    expect(file?.last_commit_id).toBe("file-last-commit");
+    expect(fake.calls[0].url).toBe(
+      "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/files/notes%2Fnote.md?ref=remote-a",
+    );
+  });
+
   it("lists branch names across pages", async () => {
     fake.queue({ status: 200, json: [{ name: "main" }, { name: "dev" }], headers: { "X-Next-Page": "2" } });
     fake.queue({ status: 200, json: [{ name: "release" }], headers: { "X-Next-Page": "" } });

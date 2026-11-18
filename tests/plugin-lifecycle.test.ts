@@ -153,6 +153,73 @@ describe("plugin lifecycle", () => {
     expect(order).toEqual(["recover", "sync"]);
   });
 
+  it("saving settings preserves an unconfirmed commit intent", async () => {
+    const plugin = new TestPlugin(fakePluginData(), fakeApp(() => undefined));
+    await plugin.loadSettings();
+    const intent = {
+      transactionId: "sync-tx-1",
+      basedOnRemoteSha: "remote-a",
+      target: {
+        baseUrl: "https://gitlab.com",
+        projectPath: "group/project",
+        branch: "main",
+      },
+      plan: {
+        basedOnRemoteSha: "remote-a",
+        actions: [],
+        materializeAfterCommit: [],
+        materializeWithoutCommit: [],
+        streamChanges: [],
+        nextTrackedFiles: {},
+        acknowledgedDirtyPaths: [],
+        conflictPaths: [],
+      },
+      createdAt: 1,
+    };
+    await plugin.stateStore.update((data) => {
+      data.state.unconfirmedCommit = intent;
+    });
+
+    plugin.settings.showRibbonIcon = !plugin.settings.showRibbonIcon;
+    await plugin.saveSettings();
+
+    const saved = await plugin.stateStore.load();
+    expect(saved.settings.showRibbonIcon).toBe(plugin.settings.showRibbonIcon);
+    expect(saved.state.unconfirmedCommit).toEqual(intent);
+  });
+
+  it("refuses reset while an unconfirmed commit intent is active", async () => {
+    const plugin = new TestPlugin(fakePluginData(), fakeApp(() => undefined));
+    await plugin.loadSettings();
+    await plugin.stateStore.update((data) => {
+      data.state.unconfirmedCommit = {
+        transactionId: "sync-tx-1",
+        basedOnRemoteSha: "remote-a",
+        target: {
+          baseUrl: "https://gitlab.com",
+          projectPath: "group/project",
+          branch: "main",
+        },
+        plan: {
+          basedOnRemoteSha: "remote-a",
+          actions: [],
+          materializeAfterCommit: [],
+          materializeWithoutCommit: [],
+          streamChanges: [],
+          nextTrackedFiles: {},
+          acknowledgedDirtyPaths: [],
+          conflictPaths: [],
+        },
+        createdAt: 1,
+      };
+    });
+
+    await expect(plugin.reset()).rejects.toThrow(
+      "Cannot reset sync state while a commit outcome is unresolved",
+    );
+    expect((await plugin.stateStore.load()).state.unconfirmedCommit).not.toBeNull();
+  });
+
   it("does not startup sync an uninitialized vault", async () => {
     let layoutCallback!: () => Promise<void>;
     const plugin = new TestPlugin(

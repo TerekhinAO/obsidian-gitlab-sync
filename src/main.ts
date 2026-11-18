@@ -270,13 +270,33 @@ export default class GitLabGitlessSyncPlugin extends Plugin {
   }
 
   async saveSettings() {
-    this.pluginData.settings = this.settings;
-    await this.stateStore.save(this.pluginData);
+    const settings = this.settings;
+    await this.stateStore.update((data) => {
+      data.settings = settings;
+    });
+    this.pluginData = await this.stateStore.load();
+    this.settings = this.pluginData.settings;
   }
 
   async reset() {
-    this.pluginData.state = { ...DEFAULT_STATE, trackedFiles: {}, dirtyEntries: {} };
-    await this.saveSettings();
+    const current = await this.stateStore.load();
+    if (
+      current.state.unconfirmedCommit !== null ||
+      current.state.pendingTransaction !== null
+    ) {
+      throw new Error("Cannot reset sync state while a commit outcome is unresolved");
+    }
+
+    await this.stateStore.update((data) => {
+      data.state = {
+        ...DEFAULT_STATE,
+        trackedFiles: {},
+        dirtyEntries: {},
+        unconfirmedCommit: null,
+      };
+    });
+    this.pluginData = await this.stateStore.load();
+    this.settings = this.pluginData.settings;
   }
 
   private isConfigured(): boolean {

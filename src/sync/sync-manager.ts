@@ -7,10 +7,12 @@ import type {
   GitLabBranch,
   GitLabCommitAction,
   GitLabCommitSummary,
+  GitLabRepositoryFile,
   GitLabTreeItem,
 } from "../gitlab/types";
 import type Logger from "../logger";
 import { ChangeJournal } from "./change-journal";
+import { acknowledgeTransactionDirtyEntries } from "./dirty-ack";
 import { IgnoreMatcher } from "./ignore-matcher";
 import { LocalMaterializer } from "./local-materializer";
 import { LocalSnapshotService, type LocalSnapshotEntry, type VersionState } from "./local-snapshot";
@@ -67,6 +69,7 @@ interface GitLabClientLike {
   validateAccess?(): Promise<void>;
   getRawBlob(blobId: string): Promise<ArrayBuffer | null>;
   getRawFile(path: string, ref: string): Promise<ArrayBuffer | null>;
+  getFile(path: string, ref: string): Promise<GitLabRepositoryFile | null>;
   getTree(ref: string): Promise<GitLabTreeItem[]>;
   listCommits(ref: string, page?: string): Promise<GitLabCommitSummary[]>;
   createCommit(input: {
@@ -125,6 +128,7 @@ interface JournalLike {
 interface MaterializerLike {
   apply(operations: MaterializeOperation[]): Promise<void>;
   applyBytes(operations: ByteMaterializeOperation[]): Promise<void>;
+  applyTransaction(transaction: PendingTransaction): Promise<void>;
   recoverPendingTransaction(): Promise<boolean>;
 }
 
@@ -410,6 +414,7 @@ export class SyncManager {
           client,
           settings,
           data.state.unconfirmedCommit,
+          firstBranch.commit.id,
         );
         if (outcome.status === "found") {
           return await this.recoverFoundUnconfirmedCommit(
@@ -540,6 +545,11 @@ export class SyncManager {
       await this.persistUnconfirmedCommit({
         transactionId,
         basedOnRemoteSha: remoteSha,
+        target: {
+          baseUrl: input.settings.gitlabBaseUrl,
+          projectPath: input.settings.projectPath,
+          branch: input.settings.branch,
+        },
         plan: clonePlan(plan),
         createdAt: this.now(),
       });
@@ -561,7 +571,7 @@ export class SyncManager {
       await this.persistPendingTransaction(transaction);
 
       this.setProgress(input.progress, "Updating local vault…");
-      await this.getMaterializer().apply(transaction.materializeOperations);
+      await this.getMaterializer().applyTransaction(transaction);
       await this.finalizeTransaction(transaction);
       this.setProgress(input.progress, "Sync complete");
 
@@ -620,13 +630,18 @@ export class SyncManager {
     client: GitLabClientLike,
     settings: GitLabSyncSettings,
     intent: UnconfirmedCommit,
+    headSha: string,
   ): Promise<
     | { status: "found"; commit: GitLabCommitSummary }
     | { status: "absent" }
     | { status: "unknown" }
   > {
+    if (!sameGitLabTarget(intent.target, settings)) {
+      throw new Error("Previous GitLab commit belongs to a different target; retry is blocked");
+    }
+
     for (let page = 1; page <= MAX_TRANSACTION_HISTORY_PAGES; page += 1) {
-      const commits = await client.listCommits(settings.branch, String(page));
+      const commits = await client.listCommits(headSha, String(page));
       if (commits.length === 0) {
         return { status: "unknown" };
       }
@@ -759,6 +774,7 @@ export class SyncManager {
       Object.keys(loaded.state.dirtyEntries ?? {}).map((path) => normalizePath(path)),
     );
     const changes = this.excludeDirtyChanges(resume.remainingChanges, dirtyPaths);
+    const skippedForDirtyPaths = changes.length !== resume.remainingChanges.length;
     const finalIndex = await this.getJournal().suppress(async () => {
       const applier = this.getStreamingApplier(client);
       return await applier.applyStream({
@@ -776,11 +792,15 @@ export class SyncManager {
     });
 
     await this.options.stateStore.update((data) => {
-      data.state.lastSyncedCommitSha = remoteSha;
+      // A dirty path was deliberately left unmaterialized. Advancing the base here would hide
+      // its remote change on the next sync; keep the old base so three-way resolution must run.
+      if (!skippedForDirtyPaths) {
+        data.state.lastSyncedCommitSha = remoteSha;
+      }
       data.state.trackedFiles = cloneTrackedFiles(finalIndex);
       data.state.pendingTransaction = null;
       data.state.lastSyncAt = this.now();
-      data.state.lastSyncResult = "success";
+      data.state.lastSyncResult = skippedForDirtyPaths ? "conflict" : "success";
       data.state.remoteBackoffUntil = null;
       data.state.remoteBackoffReason = null;
       data.state.remoteApply = null;
@@ -788,10 +808,12 @@ export class SyncManager {
 
     this.setProgress(progress, "Sync complete");
     return {
-      status: "success",
+      status: skippedForDirtyPaths ? "conflict" : "success",
       trigger,
-      message: "Sync complete",
-      commitSha: remoteSha,
+      message: skippedForDirtyPaths
+        ? "Remote changes skipped for locally modified files"
+        : "Sync complete",
+      commitSha: skippedForDirtyPaths ? undefined : remoteSha,
       attempts: 1,
     };
   }
@@ -825,6 +847,7 @@ export class SyncManager {
       materializeOperations: plan.materializeAfterCommit,
       nextTrackedFiles: cloneTrackedFiles(plan.nextTrackedFiles),
       acknowledgedDirtyPaths: [...plan.acknowledgedDirtyPaths],
+      acknowledgedDirtyEntries: plan.acknowledgedDirtyEntries?.map((entry) => ({ ...entry })),
       conflictPaths: [...plan.conflictPaths],
       createdAt: this.now(),
     };
@@ -841,9 +864,7 @@ export class SyncManager {
     await this.options.stateStore.update((data) => {
       data.state.lastSyncedCommitSha = transaction.committedSha;
       data.state.trackedFiles = cloneTrackedFiles(transaction.nextTrackedFiles);
-      for (const path of transaction.acknowledgedDirtyPaths) {
-        delete data.state.dirtyEntries[normalizePath(path)];
-      }
+      acknowledgeTransactionDirtyEntries(data, transaction);
       data.state.pendingTransaction = null;
       data.state.lastSyncAt = this.now();
       data.state.lastSyncResult = transaction.conflictPaths.length > 0 ? "conflict" : "success";
@@ -1002,6 +1023,8 @@ export class SyncManager {
   ): PlannerLike {
     return this.options.createPlanner?.(client, settings, getRemoteVersion) ?? new SyncPlanner({
       getRemoteVersion,
+      getLastCommitId: async (path, remoteSha) =>
+        (await client.getFile(path, remoteSha))?.last_commit_id ?? null,
       deviceName: deviceLabel(settings.authorName, this.platform()),
       conflictStrategy: settings.conflictStrategy,
     });
@@ -1252,6 +1275,15 @@ function clonePlan(plan: SyncPlan): SyncPlan {
 
 function transactionIdFromMessage(message: string): string | null {
   return message.match(/\[sync-tx:([a-z0-9-]+)\]/i)?.[1] ?? null;
+}
+
+function sameGitLabTarget(
+  target: UnconfirmedCommit["target"],
+  settings: GitLabSyncSettings,
+): boolean {
+  return target.baseUrl === settings.gitlabBaseUrl &&
+    target.projectPath === settings.projectPath &&
+    target.branch === settings.branch;
 }
 
 function clonePlanIntent(intent: UnconfirmedCommit): UnconfirmedCommit {

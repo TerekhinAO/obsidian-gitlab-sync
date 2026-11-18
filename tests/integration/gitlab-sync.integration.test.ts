@@ -225,6 +225,9 @@ describe("GitLab sync integration", () => {
         apply: async () => {
           throw new Error("terminated during materialization");
         },
+        applyTransaction: async () => {
+          throw new Error("terminated during materialization");
+        },
       },
     });
 

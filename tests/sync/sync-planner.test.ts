@@ -28,6 +28,7 @@ describe("SyncPlanner", () => {
       streamChanges: [],
       nextTrackedFiles: { "note.md": tracked("A") },
       acknowledgedDirtyPaths: ["note.md"],
+      acknowledgedDirtyEntries: [dirty("note.md", "upsert")],
       conflictPaths: [],
     });
   });
@@ -128,6 +129,8 @@ describe("SyncPlanner", () => {
     const planner = plannerWithRemote({
       "present.md": present("remote"),
       // "gone.md" and "phantom.md" are absent from the remote head.
+    }, {
+      "present.md": "present-last-commit",
     });
 
     const plan = await planner.plan({
@@ -153,9 +156,25 @@ describe("SyncPlanner", () => {
     });
 
     expect(plan.actions).toEqual([
-      { action: "delete", file_path: "present.md" },
+      { action: "delete", file_path: "present.md", last_commit_id: "present-last-commit" },
       { action: "create", file_path: "phantom.md", content: base64("new"), encoding: "base64" },
     ]);
+  });
+
+  it("refuses an update when the remote file's last commit cannot be determined", async () => {
+    const planner = plannerWithRemote({ "updated.md": present("old") });
+
+    await expect(planner.plan({
+      baseSha: "base",
+      remoteSha: "remote",
+      trackedFiles: { "updated.md": tracked("old") },
+      dirtyEntries: [dirty("updated.md", "upsert")],
+      remoteChanges: [],
+      localSnapshots: [
+        snapshot("updated.md", present("updated"), present("old")),
+      ],
+      now,
+    })).rejects.toThrow("Cannot determine last commit id for updated.md at remote");
   });
 
   it("creates conflict files in GitLab and materializes remote content only after the commit succeeds", async () => {

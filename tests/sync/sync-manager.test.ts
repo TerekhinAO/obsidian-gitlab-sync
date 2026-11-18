@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { SyncManager } from "../../src/sync/sync-manager";
-import type { GitLabBranch, GitLabCommitAction, GitLabCommitSummary, CreatedGitLabCommit } from "../../src/gitlab/types";
+import type {
+  CreatedGitLabCommit,
+  GitLabBranch,
+  GitLabCommitAction,
+  GitLabCommitSummary,
+  GitLabRepositoryFile,
+} from "../../src/gitlab/types";
 import type { DirtyEntry, GitLabSyncSettings, LocalSyncState, PendingTransaction, PluginData, TrackedFile, UnconfirmedCommit } from "../../src/sync/types";
 import type { RemoteChange } from "../../src/sync/remote-diff";
 import type { SyncPlan } from "../../src/sync/sync-planner";
@@ -167,12 +173,56 @@ describe("SyncManager", () => {
     const messageId = observed.message?.match(/\[sync-tx:([a-z0-9-]+)\]$/)?.[1];
     expect(intent?.transactionId).toBe(messageId);
     expect(intent?.basedOnRemoteSha).toBe("remote-a");
+    expect(intent?.target).toEqual({
+      baseUrl: settings.gitlabBaseUrl,
+      projectPath: settings.projectPath,
+      branch: settings.branch,
+    });
     expect(intent?.plan.actions).toEqual(localCommitPlan("remote-a", "note.md").actions);
 
     const finalState = await fixture.store.load();
     expect(finalState.state.unconfirmedCommit).toBeNull();
     expect(finalState.state.pendingTransaction).toBeNull();
     expect(finalState.state.lastSyncedCommitSha).toBe("commit-a");
+  });
+
+  it("uses the production planner to attach optimistic locks to tracked-file updates", async () => {
+    const fixture = managerFixture({
+      data: initializedData({
+        dirtyEntries: { "note.md": dirty("note.md") },
+        trackedFiles: { "note.md": tracked("old") },
+      }),
+      useProductionPlanner: true,
+      remoteFiles: { "note.md": "old" },
+      repositoryFiles: {
+        "note.md": {
+          file_name: "note.md",
+          file_path: "note.md",
+          size: 3,
+          encoding: "base64",
+          content: base64("old"),
+          content_sha256: "blob-old",
+          ref: "remote-a",
+          blob_id: "blob-old",
+          commit_id: "remote-a",
+          last_commit_id: "remote-file-commit",
+        },
+      },
+      snapshotBases: { "note.md": "old" },
+    });
+
+    await expect(fixture.manager.sync("manual")).resolves.toMatchObject({ status: "success" });
+
+    const commitCalls = fixture.gitlab.createCommit.mock.calls as unknown as Array<
+      [{ actions: GitLabCommitAction[] }]
+    >;
+    const action = commitCalls[0]?.[0].actions[0];
+    expect(action).toMatchObject({
+      action: "update",
+      file_path: "note.md",
+      last_commit_id: "remote-file-commit",
+    });
+    expect(fixture.gitlab.getFile).toHaveBeenCalledWith("note.md", "remote-a");
   });
 
   it("recovers a pending transaction before reading the GitLab branch", async () => {
@@ -215,7 +265,7 @@ describe("SyncManager", () => {
     });
 
     expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
-    expect(fixture.gitlab.listCommits).toHaveBeenCalledWith("main", "1");
+    expect(fixture.gitlab.listCommits).toHaveBeenCalledWith("remote-b", "1");
     const state = await fixture.store.load();
     expect(state.state.unconfirmedCommit).toBeNull();
     expect(state.state.lastSyncedCommitSha).toBe("mobile-commit");
@@ -262,6 +312,27 @@ describe("SyncManager", () => {
     });
     expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
     expect((await fixture.store.load()).state.unconfirmedCommit).not.toBeNull();
+  });
+
+  it("blocks unconfirmed transaction recovery when the configured target changed", async () => {
+    const fixture = managerFixture({
+      data: initializedData({
+        unconfirmedCommit: unconfirmedCommit(
+          localCommitPlan("remote-a", "note.md"),
+          { ...settings, branch: "other-branch" },
+        ),
+      }),
+      settings: { ...settings, branch: "main" },
+    });
+
+    const result = await fixture.manager.sync("foreground");
+
+    expect(result).toMatchObject({
+      status: "error",
+      message: "Previous GitLab commit belongs to a different target; retry is blocked",
+    });
+    expect(fixture.gitlab.listCommits).not.toHaveBeenCalled();
+    expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
   });
 
   it("defers sync without network calls while backoff is active", async () => {
@@ -424,8 +495,7 @@ describe("SyncManager", () => {
     });
 
     await expect(fixture.manager.sync("manual")).resolves.toMatchObject({
-      status: "success",
-      commitSha: "remote-a",
+      status: "conflict",
     });
 
     expect(fixture.streamingApplier.applyStream).toHaveBeenCalledTimes(1);
@@ -435,6 +505,8 @@ describe("SyncManager", () => {
     const state = (await fixture.store.load()).state;
     expect(state.dirtyEntries).toEqual({ "resume.md": dirty("resume.md") });
     expect(state.remoteApply).toBeNull();
+    expect(state.lastSyncedCommitSha).toBe("base-a");
+    expect(state.lastSyncResult).toBe("conflict");
   });
 
   it("discards a stale resume point when the remote head moved", async () => {
@@ -537,7 +609,7 @@ describe("SyncManager", () => {
     });
     fixture.planner.plan.mockResolvedValueOnce(localCommitPlan("remote-a", "note.md"));
     fixture.gitlab.createCommit.mockResolvedValueOnce(commit("commit-a", ["remote-a"]));
-    fixture.materializer.apply.mockRejectedValueOnce(new Error("disk full"));
+    fixture.materializer.applyTransaction.mockRejectedValueOnce(new Error("disk full"));
 
     await expect(fixture.manager.sync("manual")).resolves.toMatchObject({
       status: "error",
@@ -551,6 +623,33 @@ describe("SyncManager", () => {
       committedSha: "commit-a",
       acknowledgedDirtyPaths: ["note.md"],
     });
+  });
+
+  it("does not acknowledge a dirty entry edited after its snapshot", async () => {
+    const snapshotEntry = { ...dirty("note.md"), recordedAt: 1 };
+    const postSnapshotEntry = { ...dirty("note.md"), recordedAt: 2 };
+    const plan: SyncPlan = {
+      ...localCommitPlan("remote-a", "note.md"),
+      acknowledgedDirtyEntries: [snapshotEntry],
+    };
+    const fixture = managerFixture({
+      data: initializedData({
+        dirtyEntries: { "note.md": snapshotEntry },
+      }),
+    });
+    fixture.planner.plan.mockResolvedValueOnce(plan);
+    fixture.gitlab.createCommit.mockImplementationOnce(async () => {
+      await fixture.store.update((data) => {
+        data.state.dirtyEntries["note.md"] = postSnapshotEntry;
+      });
+      return commit("commit-a", ["remote-a"]);
+    });
+
+    await expect(fixture.manager.sync("manual")).resolves.toMatchObject({ status: "success" });
+
+    const state = await fixture.store.load();
+    expect(state.state.dirtyEntries["note.md"]).toEqual(postSnapshotEntry);
+    expect(state.state.lastSyncedCommitSha).toBe("commit-a");
   });
 
   it("validates initialization, settings, secret, and branch push access before planning", async () => {
@@ -710,12 +809,16 @@ function managerFixture(options: {
   remoteChanges?: RemoteChange[];
   remoteTree?: any[];
   localFiles?: Record<string, string>;
+  remoteFiles?: Record<string, string>;
+  repositoryFiles?: Record<string, GitLabRepositoryFile>;
+  snapshotBases?: Record<string, string>;
   platform?: DevicePlatform;
   createPlanner?: (
     client: unknown,
     settings: unknown,
     getRemoteVersion: (path: string, remoteSha: string) => Promise<VersionState>,
   ) => PlannerLike;
+  useProductionPlanner?: boolean;
   createProgressNotice?: (message: string) => {
     setMessage(message: string): void;
     hide(): void;
@@ -762,6 +865,9 @@ function managerFixture(options: {
     apply: vi.fn(async () => {
       events.push("apply");
     }),
+    applyTransaction: vi.fn(async () => {
+      events.push("apply");
+    }),
     applyBytes: vi.fn(async () => undefined),
   };
   const streamingApplier = {
@@ -790,7 +896,11 @@ function managerFixture(options: {
     getBranch: vi.fn(async () => branch(branchHeads.shift() ?? "remote-a", options.canPush ?? true)),
     validateAccess: vi.fn(async () => undefined),
     getRawBlob: vi.fn(async () => null),
-    getRawFile: vi.fn(async () => null),
+    getRawFile: vi.fn(async (path: string) => {
+      const content = options.remoteFiles?.[path];
+      return content === undefined ? null : new TextEncoder().encode(content).buffer;
+    }),
+    getFile: vi.fn(async (path: string) => options.repositoryFiles?.[path] ?? null),
     getTree: vi.fn(async () => options.remoteTree ?? []),
     listCommits: vi.fn(async (): Promise<GitLabCommitSummary[]> => []),
     createCommit: vi.fn(async () => commit("commit-a", ["remote-a"])),
@@ -811,7 +921,9 @@ function managerFixture(options: {
         path: entry.path,
         operation: entry.operation,
         local: { exists: true, bytes: new TextEncoder().encode("local") },
-        base: { exists: false, bytes: null },
+        base: options.snapshotBases?.[entry.path] === undefined
+          ? { exists: false, bytes: null }
+          : { exists: true, bytes: new TextEncoder().encode(options.snapshotBases[entry.path]) },
       })),
     ),
   };
@@ -838,7 +950,9 @@ function managerFixture(options: {
       createRemoteDiffService: () => remoteDiff,
       createIgnoreMatcher: () => ignoreMatcher,
       createLocalSnapshotService: () => localSnapshot,
-      createPlanner: options.createPlanner ?? (() => planner),
+      createPlanner: options.useProductionPlanner
+        ? undefined
+        : options.createPlanner ?? (() => planner),
       createStreamingApplier: () => streamingApplier as unknown as StreamingRemoteApplier,
       materializer,
       journal,
@@ -975,10 +1089,18 @@ function pendingTransaction(committedSha: string): PendingTransaction {
   };
 }
 
-function unconfirmedCommit(plan: SyncPlan): UnconfirmedCommit {
+function unconfirmedCommit(
+  plan: SyncPlan,
+  target: GitLabSyncSettings = settings,
+): UnconfirmedCommit {
   return {
     transactionId: "sync-tx-1",
     basedOnRemoteSha: "remote-a",
+    target: {
+      baseUrl: target.gitlabBaseUrl,
+      projectPath: target.projectPath,
+      branch: target.branch,
+    },
     plan,
     createdAt: 1,
   };

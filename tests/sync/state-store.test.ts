@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { StateStore } from "../../src/sync/state-store";
 
 function fakePlugin(initialData: unknown = null) {
@@ -90,6 +90,56 @@ describe("StateStore", () => {
 
     const data = await store.load();
     expect(Object.keys(data.state.dirtyEntries).sort()).toEqual(["a.md", "b.md"]);
+  });
+
+  it("waits for a pending update before loading state", async () => {
+    const { plugin } = fakePlugin();
+    const store = new StateStore(plugin);
+    let releaseUpdate!: () => void;
+    const update = store.update((data) => {
+      data.state.dirtyEntries["note.md"] = {
+        path: "note.md",
+        operation: "upsert",
+        recordedAt: 1,
+      };
+      return new Promise<void>((resolve) => {
+        releaseUpdate = resolve;
+      });
+    });
+    const loaded = store.load();
+
+    await vi.waitFor(() => expect(releaseUpdate).toBeTypeOf("function"));
+    releaseUpdate();
+    await Promise.all([update, loaded]);
+
+    expect((await loaded).state.dirtyEntries["note.md"]).toEqual({
+      path: "note.md",
+      operation: "upsert",
+      recordedAt: 1,
+    });
+  });
+
+  it("keeps updates working after a save fails once", async () => {
+    let saves = 0;
+    const { plugin } = fakePlugin();
+    const originalSaveData = plugin.saveData;
+    plugin.saveData = async (data: unknown) => {
+      saves += 1;
+      if (saves === 1) {
+        throw new Error("disk temporarily unavailable");
+      }
+      await originalSaveData(data);
+    };
+    const store = new StateStore(plugin);
+
+    await expect(store.update((data) => {
+      data.state.lastSyncAt = 1;
+    })).rejects.toThrow("disk temporarily unavailable");
+    await expect(store.update((data) => {
+      data.state.lastSyncAt = 2;
+    })).resolves.toBeDefined();
+
+    expect((await store.load()).state.lastSyncAt).toBe(2);
   });
 
   it("migrates schema-1 state to schema 3 without losing tracked files, dirty entries, or transactions", async () => {
@@ -194,6 +244,11 @@ describe("StateStore", () => {
     const unconfirmedCommit = {
       transactionId: "sync-tx-1",
       basedOnRemoteSha: "remote-a",
+      target: {
+        baseUrl: "https://gitlab.example.com",
+        projectPath: "group/project",
+        branch: "main",
+      },
       plan: {
         basedOnRemoteSha: "remote-a",
         actions: [{

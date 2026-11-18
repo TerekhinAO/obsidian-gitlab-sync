@@ -16,6 +16,7 @@ export interface SyncPlan {
   streamChanges: RemoteChange[];
   nextTrackedFiles: Record<string, TrackedFile>;
   acknowledgedDirtyPaths: string[];
+  acknowledgedDirtyEntries?: DirtyEntry[];
   conflictPaths: string[];
 }
 
@@ -100,6 +101,8 @@ export class SyncPlanner {
         streamChanges: input.remoteChanges,
         nextTrackedFiles,
         acknowledgedDirtyPaths,
+    acknowledgedDirtyEntries: input.dirtyEntries.filter((entry) =>
+      localSnapshotPaths.has(entry.path)),
         conflictPaths: conflictPlan.conflictPaths,
       };
     }
@@ -131,6 +134,8 @@ export class SyncPlanner {
       streamChanges: [],
       nextTrackedFiles,
       acknowledgedDirtyPaths,
+      acknowledgedDirtyEntries: input.dirtyEntries.filter((entry) =>
+        localSnapshotPaths.has(entry.path)),
       conflictPaths: conflictPlan.conflictPaths,
     };
   }
@@ -183,7 +188,9 @@ export class SyncPlanner {
 
       const lastCommitId = await this.getLastCommitId(action.file_path, remoteSha);
       if (lastCommitId === null) {
-        locked.push(action);
+        throw new Error(
+          `Cannot determine last commit id for ${action.file_path} at ${remoteSha}`,
+        );
       } else {
         locked.push({ ...action, last_commit_id: lastCommitId });
       }

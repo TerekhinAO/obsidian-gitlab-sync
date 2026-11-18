@@ -15,6 +15,7 @@ import type {
   CreatedGitLabCommit,
   GitLabBranch,
   GitLabCommitSummary,
+  GitLabRepositoryFile,
   GitLabCompareResult,
   GitLabPayloadWarning,
   GitLabProject,
@@ -207,6 +208,19 @@ export class GitLabClient {
     try {
       return await this.requestArrayBuffer(
         `/repository/files/${encodeURIComponent(path)}/raw?ref=${encodeURIComponent(ref)}`,
+      );
+    } catch (error) {
+      if (error instanceof GitLabNotFoundError) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async getFile(path: string, ref: string): Promise<GitLabRepositoryFile | null> {
+    try {
+      return await this.requestJson<GitLabRepositoryFile>(
+        `/repository/files/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`,
       );
     } catch (error) {
       if (error instanceof GitLabNotFoundError) {

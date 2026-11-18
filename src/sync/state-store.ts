@@ -27,6 +27,11 @@ export class StateStore {
   constructor(private plugin: Pick<Plugin, "loadData" | "saveData">) {}
 
   async load(): Promise<PluginData> {
+    await this.writeChain;
+    return await this.loadUnlocked();
+  }
+
+  private async loadUnlocked(): Promise<PluginData> {
     const raw = (await this.plugin.loadData()) as Partial<PluginData> | null;
     const settings = {
       ...DEFAULT_SETTINGS,
@@ -74,18 +79,20 @@ export class StateStore {
       },
     };
 
-    this.writeChain = this.writeChain.then(() => this.plugin.saveData(sanitized));
-    return this.writeChain;
+    const save = this.writeChain.then(() => this.plugin.saveData(sanitized));
+    this.writeChain = save.catch(() => undefined);
+    return save;
   }
 
   async update(mutator: (data: PluginData) => void | Promise<void>): Promise<PluginData> {
     let updated!: PluginData;
-    this.writeChain = this.writeChain.then(async () => {
-      updated = await this.load();
+    const update = this.writeChain.then(async () => {
+      updated = await this.loadUnlocked();
       await mutator(updated);
       await this.plugin.saveData(updated);
     });
-    await this.writeChain;
+    this.writeChain = update.catch(() => undefined);
+    await update;
     return updated;
   }
 }
