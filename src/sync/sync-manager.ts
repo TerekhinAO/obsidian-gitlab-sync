@@ -6,6 +6,7 @@ import type {
   CreatedGitLabCommit,
   GitLabBranch,
   GitLabCommitAction,
+  GitLabCommitSummary,
   GitLabTreeItem,
 } from "../gitlab/types";
 import type Logger from "../logger";
@@ -67,6 +68,7 @@ interface GitLabClientLike {
   getRawBlob(blobId: string): Promise<ArrayBuffer | null>;
   getRawFile(path: string, ref: string): Promise<ArrayBuffer | null>;
   getTree(ref: string): Promise<GitLabTreeItem[]>;
+  listCommits(ref: string, page?: string): Promise<GitLabCommitSummary[]>;
   createCommit(input: {
     message: string;
     actions: SyncPlan["actions"];
@@ -171,6 +173,7 @@ export interface SyncManagerOptions {
 }
 
 const MAX_PLAN_ATTEMPTS = 2;
+const MAX_TRANSACTION_HISTORY_PAGES = 10;
 
 export class SyncManager {
   private syncing = false;
@@ -380,7 +383,7 @@ export class SyncManager {
         };
       }
 
-      const data = await this.options.stateStore.load();
+      let data = await this.options.stateStore.load();
       this.validateInitialized(data);
 
       const deferredRetryAt = this.remoteBackoffRetryAt(data.state);
@@ -401,6 +404,33 @@ export class SyncManager {
 
       const firstBranch = await client.getBranch();
       this.validateBranch(firstBranch);
+
+      if (data.state.unconfirmedCommit !== null) {
+        const outcome = await this.resolveUnconfirmedCommit(
+          client,
+          settings,
+          data.state.unconfirmedCommit,
+        );
+        if (outcome.status === "found") {
+          return await this.recoverFoundUnconfirmedCommit(
+            data.state.unconfirmedCommit,
+            outcome.commit,
+            client,
+            settings,
+            trigger,
+          );
+        }
+        if (outcome.status === "unknown") {
+          throw new Error(
+            "Previous GitLab commit outcome is unknown; retry is blocked until history is available",
+          );
+        }
+
+        await this.options.stateStore.update((next) => {
+          next.state.unconfirmedCommit = null;
+        });
+        data = await this.options.stateStore.load();
+      }
 
       if (trigger !== "audit") {
         const resumable = this.resumableRemoteApply(data.state, firstBranch.commit.id);
@@ -584,6 +614,73 @@ export class SyncManager {
       localSnapshots: [],
       now: this.nowDate(),
     });
+  }
+
+  private async resolveUnconfirmedCommit(
+    client: GitLabClientLike,
+    settings: GitLabSyncSettings,
+    intent: UnconfirmedCommit,
+  ): Promise<
+    | { status: "found"; commit: GitLabCommitSummary }
+    | { status: "absent" }
+    | { status: "unknown" }
+  > {
+    for (let page = 1; page <= MAX_TRANSACTION_HISTORY_PAGES; page += 1) {
+      const commits = await client.listCommits(settings.branch, String(page));
+      if (commits.length === 0) {
+        return { status: "unknown" };
+      }
+
+      for (const commit of commits) {
+        if (transactionIdFromMessage(commit.message) === intent.transactionId) {
+          return { status: "found", commit };
+        }
+        if (commit.id === intent.basedOnRemoteSha) {
+          return { status: "absent" };
+        }
+      }
+    }
+
+    return { status: "unknown" };
+  }
+
+  private async recoverFoundUnconfirmedCommit(
+    intent: UnconfirmedCommit,
+    remoteCommit: GitLabCommitSummary,
+    client: GitLabClientLike,
+    settings: GitLabSyncSettings,
+    trigger: SyncTrigger,
+  ): Promise<SyncResult> {
+    let finalizedPlan = intent.plan;
+    if (!remoteCommit.parent_ids.includes(intent.plan.basedOnRemoteSha)) {
+      finalizedPlan = await this.planForActualCreatedCommit(
+        client,
+        settings,
+        intent.basedOnRemoteSha,
+        {
+          id: remoteCommit.id,
+          parent_ids: remoteCommit.parent_ids,
+        },
+        intent.plan,
+        this.memoizedRemoteVersion(client),
+      );
+    }
+
+    const transaction = this.pendingTransaction(remoteCommit.id, finalizedPlan);
+    await this.persistPendingTransaction(transaction);
+    const recovered = await this.getMaterializer().recoverPendingTransaction();
+    if (!recovered) {
+      throw new Error("Failed to recover confirmed GitLab commit transaction");
+    }
+
+    return {
+      status: transaction.conflictPaths.length > 0 ? "conflict" : "success",
+      trigger,
+      message: "Recovered pending sync",
+      commitSha: remoteCommit.id,
+      recovered: true,
+      attempts: 1,
+    };
   }
 
   private async applyRemoteOnlyPlan(
@@ -1151,6 +1248,10 @@ function clonePlan(plan: SyncPlan): SyncPlan {
     acknowledgedDirtyPaths: [...plan.acknowledgedDirtyPaths],
     conflictPaths: [...plan.conflictPaths],
   };
+}
+
+function transactionIdFromMessage(message: string): string | null {
+  return message.match(/\[sync-tx:([a-z0-9-]+)\]/i)?.[1] ?? null;
 }
 
 function clonePlanIntent(intent: UnconfirmedCommit): UnconfirmedCommit {

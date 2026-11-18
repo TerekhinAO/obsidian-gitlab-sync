@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { SyncManager } from "../../src/sync/sync-manager";
-import type { GitLabBranch, GitLabCommitAction, CreatedGitLabCommit } from "../../src/gitlab/types";
-import type { DirtyEntry, GitLabSyncSettings, LocalSyncState, PendingTransaction, PluginData, TrackedFile } from "../../src/sync/types";
+import type { GitLabBranch, GitLabCommitAction, GitLabCommitSummary, CreatedGitLabCommit } from "../../src/gitlab/types";
+import type { DirtyEntry, GitLabSyncSettings, LocalSyncState, PendingTransaction, PluginData, TrackedFile, UnconfirmedCommit } from "../../src/sync/types";
 import type { RemoteChange } from "../../src/sync/remote-diff";
 import type { SyncPlan } from "../../src/sync/sync-planner";
 import type { StreamingRemoteApplier } from "../../src/sync/remote-only-stream";
@@ -191,6 +191,77 @@ describe("SyncManager", () => {
     expect(fixture.gitlab.getBranch).not.toHaveBeenCalled();
     expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
     expect((await fixture.store.load()).state.lastSyncedCommitSha).toBe("committed-before-restart");
+  });
+
+  it("recovers an accepted mobile commit found behind a newer remote commit", async () => {
+    const plan = localCommitPlan("remote-a", "note.md");
+    const fixture = managerFixture({
+      data: initializedData({
+        dirtyEntries: { "note.md": dirty("note.md") },
+        unconfirmedCommit: unconfirmedCommit(plan),
+      }),
+      branchHeads: ["remote-b"],
+    });
+    fixture.gitlab.listCommits.mockResolvedValueOnce([
+      commitSummary("remote-b", "Sync vault from desktop", ["mobile-commit"]),
+      commitSummary("mobile-commit", `Sync vault from iPhone [sync-tx:sync-tx-1]`, ["remote-a"]),
+      commitSummary("remote-a", "base", []),
+    ]);
+
+    await expect(fixture.manager.sync("foreground")).resolves.toMatchObject({
+      status: "success",
+      commitSha: "mobile-commit",
+      recovered: true,
+    });
+
+    expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
+    expect(fixture.gitlab.listCommits).toHaveBeenCalledWith("main", "1");
+    const state = await fixture.store.load();
+    expect(state.state.unconfirmedCommit).toBeNull();
+    expect(state.state.lastSyncedCommitSha).toBe("mobile-commit");
+    expect(state.state.trackedFiles).toEqual(plan.nextTrackedFiles);
+    expect(state.state.dirtyEntries).toEqual({});
+  });
+
+  it("clears an unconfirmed commit when history reaches the intended base without it", async () => {
+    const fixture = managerFixture({
+      data: initializedData({
+        unconfirmedCommit: unconfirmedCommit(localCommitPlan("remote-a", "note.md")),
+      }),
+    });
+    fixture.gitlab.listCommits.mockResolvedValueOnce([
+      commitSummary("remote-a", "base", []),
+    ]);
+    fixture.planner.plan.mockResolvedValueOnce(remoteOnlyPlan("remote-a", []));
+
+    await expect(fixture.manager.sync("foreground")).resolves.toMatchObject({
+      status: "success",
+      commitSha: "remote-a",
+    });
+
+    expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
+    expect((await fixture.store.load()).state.unconfirmedCommit).toBeNull();
+  });
+
+  it("does not retry a commit when unconfirmed transaction ancestry is unknown", async () => {
+    const fixture = managerFixture({
+      data: initializedData({
+        unconfirmedCommit: unconfirmedCommit(localCommitPlan("remote-a", "note.md")),
+      }),
+      branchHeads: ["remote-b"],
+    });
+    fixture.gitlab.listCommits.mockResolvedValueOnce([
+      commitSummary("remote-b", "unrelated history", ["remote-x"]),
+    ]);
+
+    const result = await fixture.manager.sync("foreground");
+
+    expect(result).toMatchObject({
+      status: "error",
+      message: "Previous GitLab commit outcome is unknown; retry is blocked until history is available",
+    });
+    expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
+    expect((await fixture.store.load()).state.unconfirmedCommit).not.toBeNull();
   });
 
   it("defers sync without network calls while backoff is active", async () => {
@@ -721,6 +792,7 @@ function managerFixture(options: {
     getRawBlob: vi.fn(async () => null),
     getRawFile: vi.fn(async () => null),
     getTree: vi.fn(async () => options.remoteTree ?? []),
+    listCommits: vi.fn(async (): Promise<GitLabCommitSummary[]> => []),
     createCommit: vi.fn(async () => commit("commit-a", ["remote-a"])),
   };
   const remoteDiff = {
@@ -903,6 +975,15 @@ function pendingTransaction(committedSha: string): PendingTransaction {
   };
 }
 
+function unconfirmedCommit(plan: SyncPlan): UnconfirmedCommit {
+  return {
+    transactionId: "sync-tx-1",
+    basedOnRemoteSha: "remote-a",
+    plan,
+    createdAt: 1,
+  };
+}
+
 function branch(sha: string, canPush: boolean): GitLabBranch {
   return {
     name: "main",
@@ -913,6 +994,10 @@ function branch(sha: string, canPush: boolean): GitLabBranch {
 
 function commit(id: string, parentIds: string[]): CreatedGitLabCommit {
   return { id, parent_ids: parentIds };
+}
+
+function commitSummary(id: string, message: string, parentIds: string[]): GitLabCommitSummary {
+  return { id, title: message, message, parent_ids: parentIds };
 }
 
 function dirty(path: string): DirtyEntry {
