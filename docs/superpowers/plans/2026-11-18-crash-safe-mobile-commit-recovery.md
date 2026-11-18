@@ -1,6 +1,6 @@
 # Crash-Safe Mobile Commit Recovery Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Prevent an accepted-but-unacknowledged mobile GitLab commit from leaving the next sync on a stale base or creating a duplicate commit.
 
@@ -41,7 +41,7 @@
 **Interfaces:**
 - Produces the authoritative implementation sequence for Tasks 2–5.
 
-- [ ] Commit this plan before changing production code.
+- [x] Commit this plan before changing production code.
 
 ### Task 2: GitLab commit-history reader
 
@@ -56,10 +56,10 @@
 
 **TDD steps:**
 
-- [ ] Add a failing client test for `GET /repository/commits?ref_name=...&per_page=100&page=2`.
-- [ ] Verify it fails because `listCommits` does not exist.
-- [ ] Implement the paged REST reader without adding retries or changing POST behavior.
-- [ ] Run GitLab client tests and commit only this task.
+- [x] Add a failing client test for `GET /repository/commits?ref_name=...&per_page=100&page=2`.
+- [x] Verify it fails because `listCommits` does not exist.
+- [x] Implement the paged REST reader without adding retries or changing POST behavior.
+- [x] Run GitLab client tests and commit only this task.
 
 ### Task 3: Durable pre-commit intent state
 
@@ -74,10 +74,10 @@
 
 **TDD steps:**
 
-- [ ] Add a failing schema-compatibility test proving old schema-3 state loads with `unconfirmedCommit: null`.
-- [ ] Add a failing round-trip test proving a saved `unconfirmedCommit` is preserved exactly.
-- [ ] Implement state persistence while retaining schema version 3.
-- [ ] Run state-store tests and commit only this task.
+- [x] Add a failing schema-compatibility test proving old schema-3 state loads with `unconfirmedCommit: null`.
+- [x] Add a failing round-trip test proving a saved `unconfirmedCommit` is preserved exactly.
+- [x] Implement state persistence while retaining schema version 3.
+- [x] Run state-store tests and commit only this task.
 
 ### Task 4: Transaction ids and pre-commit persistence
 
@@ -90,11 +90,11 @@
 
 **TDD steps:**
 
-- [ ] Add failing message tests for idempotent parse and generation.
-- [ ] Add a failing sync test proving `unconfirmedCommit` is saved before `createCommit` resolves.
-- [ ] Add a failing test proving the successful response atomically replaces the intent with the existing confirmed `pendingTransaction`.
-- [ ] Implement the minimum manager changes.
-- [ ] Run focused manager tests and commit only this task.
+- [x] Add failing message tests for idempotent parse and generation.
+- [x] Add a failing sync test proving `unconfirmedCommit` is saved before `createCommit` resolves.
+- [x] Add a failing test proving the successful response atomically replaces the intent with the existing confirmed `pendingTransaction`.
+- [x] Implement the minimum manager changes.
+- [x] Run focused manager tests and commit only this task.
 
 ### Task 5: Resolve ambiguous transactions from branch history
 
@@ -109,12 +109,12 @@
 
 **TDD steps:**
 
-- [ ] Add a failing test: accepted mobile commit behind a newer desktop commit is found by id, converted to `pendingTransaction`, and recovered without another POST.
-- [ ] Add a failing test: branch history reaches the intended base without the id, so the intent is cleared and a fresh plan may run.
-- [ ] Add a failing test: intended base is absent from available history, so recovery returns an error and does not call `createCommit`.
-- [ ] Add a failing test: successful POST followed by death before response processing is recovered through the same id search path.
-- [ ] Implement bounded ancestry search and integrate it after `getBranch`, before normal planning.
-- [ ] Run focused tests and commit only this task.
+- [x] Add a failing test: accepted mobile commit behind a newer desktop commit is found by id, converted to `pendingTransaction`, and recovered without another POST.
+- [x] Add a failing test: branch history reaches the intended base without the id, so the intent is cleared and a fresh plan may run.
+- [x] Add a failing test: intended base is absent from available history, so recovery returns an error and does not call `createCommit`.
+- [x] Add a failing test: successful POST followed by death before response processing is recovered through the same id search path.
+- [x] Implement bounded ancestry search and integrate it after `getBranch`, before normal planning.
+- [x] Run focused tests and commit only this task.
 
 ### Task 6: Final review and verification
 
@@ -123,9 +123,9 @@
 
 **TDD steps:**
 
-- [ ] Run the complete suite: `node_modules/.bin/vitest run`.
-- [ ] Run `node_modules/.bin/tsc --noEmit --skipLibCheck`.
-- [ ] Run `node_modules/.bin/eslint src tests`.
-- [ ] Run production esbuild.
-- [ ] Review that no automatic POST retry path can run with an unconfirmed transaction.
-- [ ] Commit final corrections, if any.
+- [x] Run the complete suite: `node_modules/.bin/vitest run`.
+- [x] Run `node_modules/.bin/tsc --noEmit --skipLibCheck`.
+- [x] Run `node_modules/.bin/eslint src tests`.
+- [x] Run production esbuild.
+- [x] Review that no automatic POST retry path can run with an unconfirmed transaction.
+- [x] Commit final corrections, if any.
