@@ -29,6 +29,7 @@ interface CommitRecord {
   id: string;
   parentIds: string[];
   files: Map<string, Uint8Array>;
+  message: string;
   diffs?: GitLabDiff[];
 }
 
@@ -97,7 +98,10 @@ export class GitLabTestServer {
     this.compareTimeouts.add(compareKey(from, to));
   }
 
-  async desktopCommit(mutations: Record<string, FileMutation>): Promise<string> {
+  async desktopCommit(
+    mutations: Record<string, FileMutation>,
+    message = "Desktop commit",
+  ): Promise<string> {
     const parent = this.current();
     const files = cloneFiles(parent.files);
     for (const [path, content] of Object.entries(mutations)) {
@@ -107,7 +111,7 @@ export class GitLabTestServer {
         files.set(path, bytes(content));
       }
     }
-    this.headSha = await this.createRecord([parent.id], files);
+    this.headSha = await this.createRecord([parent.id], files, undefined, message);
     return this.headSha;
   }
 
@@ -171,6 +175,27 @@ export class GitLabTestServer {
       const from = required(url.searchParams.get("from"), "from");
       const to = required(url.searchParams.get("to"), "to");
       return { status: 200, json: this.compare(from, to) };
+    }
+
+    if (method === "GET" && path === "/repository/commits") {
+      const ref = required(url.searchParams.get("ref_name"), "ref_name");
+      const commit = this.commit(ref);
+      const history: CommitRecord[] = [];
+      let current: CommitRecord | undefined = commit;
+      while (current) {
+        history.push(current);
+        current = this.commits.get(current.parentIds[0] ?? "");
+      }
+      return {
+        status: 200,
+        headers: { "X-Next-Page": "" },
+        json: history.map((record) => ({
+          id: record.id,
+          title: record.message,
+          message: record.message,
+          parent_ids: record.parentIds,
+        })),
+      };
     }
 
     if (method === "GET" && path.startsWith("/repository/files/") && path.endsWith("/raw")) {
@@ -285,6 +310,7 @@ export class GitLabTestServer {
   private async createCommitFromRequest(body: string | ArrayBuffer | undefined): Promise<GitLabTestResponse> {
     const payload = JSON.parse(String(body ?? "{}")) as {
       branch: string;
+      commit_message?: string;
       actions: GitLabCommitAction[];
     };
     if (payload.branch !== this.branch) {
@@ -313,7 +339,12 @@ export class GitLabTestServer {
     }
 
     this.commitActions.push(payload.actions.map((action) => ({ ...action })));
-    this.headSha = await this.createRecord([parent.id], files);
+    this.headSha = await this.createRecord(
+      [parent.id],
+      files,
+      undefined,
+      payload.commit_message ?? "GitLab commit",
+    );
     return {
       status: 201,
       json: { id: this.headSha, parent_ids: [parent.id] } satisfies CreatedGitLabCommit,
@@ -374,10 +405,11 @@ export class GitLabTestServer {
     parentIds: string[],
     files: Map<string, Uint8Array>,
     diffs?: GitLabDiff[],
+    message = "Base commit",
   ): Promise<string> {
     const id = `commit-${String(this.nextCommitNumber).padStart(4, "0")}`;
     this.nextCommitNumber += 1;
-    this.commits.set(id, { id, parentIds, files: cloneFiles(files), diffs });
+    this.commits.set(id, { id, parentIds, files: cloneFiles(files), message, diffs });
     return id;
   }
 

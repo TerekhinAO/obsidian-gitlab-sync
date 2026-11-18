@@ -40,3 +40,11 @@
 ### Task 4: Verification
 
 - [x] Run tests, typecheck, lint, production build, and diff check.
+
+### Task 5: Production recovery edge cases
+
+- [x] Recover changes from the persisted local base, not only the remote head observed before POST.
+- [x] Build the recovered tracked index from the actual accepted commit tree even when a dirty path is not written.
+- [x] Reload persisted dirty revisions after recovery network requests.
+- [x] Compare local bytes before and after each recovery write/download and preserve divergent paths as dirty.
+- [x] Cover accepted conflict commits and edits made during compare/download with production integration tests.

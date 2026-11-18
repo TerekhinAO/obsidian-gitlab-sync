@@ -410,6 +410,175 @@ describe("GitLab sync integration", () => {
     expect(state.remoteApply).toBeNull();
     expect(state.lastSyncedCommitSha).toBe(setup.server.head);
   });
+
+  it("recovers all local-base changes from an accepted conflict commit", async () => {
+    const setup = await initializedFixture({ "note.md": "base" });
+    const localBaseSha = setup.server.head;
+    await setup.server.desktopCommit({ "note.md": "remote text" });
+    const remoteBaseSha = setup.server.head;
+    await setup.writeDirty("note.md", "local text");
+    const conflictPath = `note — conflict iPhone ${conflictStamp}.md`;
+    await setup.server.desktopCommit({
+      [conflictPath]: "local text",
+    }, `Sync vault from iPhone [sync-tx:accepted-conflict]`);
+    const acceptedSha = setup.server.head;
+    await setup.store.update((data) => {
+      data.state.unconfirmedCommit = {
+        transactionId: "accepted-conflict",
+        basedOnRemoteSha: remoteBaseSha,
+        target: {
+          baseUrl: setup.server.baseUrl,
+          projectPath: setup.server.projectPath,
+          branch: setup.server.branch,
+        },
+        capturedDirtyEntries: [{
+          path: "note.md",
+          operation: "upsert",
+          recordedAt: 1,
+        }],
+        createdAt: 1,
+      };
+      data.state.lastSyncedCommitSha = localBaseSha;
+    });
+
+    const result = await setup.manager().sync("foreground");
+
+    expect(result).toMatchObject({
+      status: "success",
+      commitSha: acceptedSha,
+      recovered: true,
+    });
+    expect(setup.server.commitActions).toEqual([]);
+    expect(setup.vault.text("note.md")).toBe("remote text");
+    expect(setup.vault.text(conflictPath)).toBe("local text");
+    const state = await setup.store.load();
+    expect(state.state.lastSyncedCommitSha).toBe(acceptedSha);
+    expect(state.state.trackedFiles["note.md"].blobId).toBe(
+      (await setup.server.tree(acceptedSha)).find((item) => item.path === "note.md")?.id,
+    );
+    expect(state.state.dirtyEntries).toEqual({});
+  });
+
+  it("does not overwrite an edit made while recovery compares commits", async () => {
+    const setup = await initializedFixture({ "note.md": "base" });
+    const localBaseSha = setup.server.head;
+    await setup.server.desktopCommit({ "note.md": "remote text" });
+    const remoteBaseSha = setup.server.head;
+    await setup.writeDirty("note.md", "local text");
+    const conflictPath = `note — conflict iPhone ${conflictStamp}.md`;
+    await setup.server.desktopCommit({
+      [conflictPath]: "local text",
+    }, `Sync vault from iPhone [sync-tx:compare-edit]`);
+    const acceptedSha = setup.server.head;
+    await setup.store.update((data) => {
+      data.state.unconfirmedCommit = {
+        transactionId: "compare-edit",
+        basedOnRemoteSha: remoteBaseSha,
+        target: {
+          baseUrl: setup.server.baseUrl,
+          projectPath: setup.server.projectPath,
+          branch: setup.server.branch,
+        },
+        capturedDirtyEntries: [{
+          path: "note.md",
+          operation: "upsert",
+          recordedAt: 1,
+        }],
+        createdAt: 1,
+      };
+      data.state.lastSyncedCommitSha = localBaseSha;
+    });
+    const originalRequest = setup.server.requestUrl.bind(setup.server);
+    let injectedEdit = false;
+    requestUrlMock.mockImplementation(async (options: any) => {
+      if (!injectedEdit && options.url.includes("/repository/compare")) {
+        injectedEdit = true;
+        await setup.vault.write("note.md", "post-compare edit");
+        await setup.store.update((data) => {
+          data.state.dirtyEntries["note.md"] = {
+            path: "note.md",
+            operation: "upsert",
+            recordedAt: 2,
+          };
+        });
+      }
+      return await originalRequest(options);
+    });
+
+    const result = await setup.manager().sync("foreground");
+
+    expect(result).toMatchObject({ status: "success", commitSha: acceptedSha, recovered: true });
+    expect(setup.vault.text("note.md")).toBe("post-compare edit");
+    expect(setup.vault.text(conflictPath)).toBe("local text");
+    const state = await setup.store.load();
+    expect(state.state.dirtyEntries["note.md"]).toEqual({
+      path: "note.md",
+      operation: "upsert",
+      recordedAt: 2,
+    });
+    expect(state.state.lastSyncedCommitSha).toBe(acceptedSha);
+    expect(state.state.trackedFiles["note.md"].blobId).toBe(
+      (await setup.server.tree(acceptedSha)).find((item) => item.path === "note.md")?.id,
+    );
+  });
+
+  it("does not overwrite an edit made while recovery downloads a file", async () => {
+    const setup = await initializedFixture({ "note.md": "base" });
+    const localBaseSha = setup.server.head;
+    await setup.server.desktopCommit({ "note.md": "remote text" });
+    const remoteBaseSha = setup.server.head;
+    await setup.writeDirty("note.md", "local text");
+    const conflictPath = `note — conflict iPhone ${conflictStamp}.md`;
+    await setup.server.desktopCommit({
+      [conflictPath]: "local text",
+    }, `Sync vault from iPhone [sync-tx:download-edit]`);
+    const acceptedSha = setup.server.head;
+    await setup.store.update((data) => {
+      data.state.unconfirmedCommit = {
+        transactionId: "download-edit",
+        basedOnRemoteSha: remoteBaseSha,
+        target: {
+          baseUrl: setup.server.baseUrl,
+          projectPath: setup.server.projectPath,
+          branch: setup.server.branch,
+        },
+        capturedDirtyEntries: [{
+          path: "note.md",
+          operation: "upsert",
+          recordedAt: 1,
+        }],
+        createdAt: 1,
+      };
+      data.state.lastSyncedCommitSha = localBaseSha;
+    });
+    const originalRequest = setup.server.requestUrl.bind(setup.server);
+    let injectedEdit = false;
+    requestUrlMock.mockImplementation(async (options: any) => {
+      if (
+        !injectedEdit &&
+        options.url.includes(`/repository/files/note.md/raw?`) &&
+        options.url.includes(`ref=${acceptedSha}`)
+      ) {
+        injectedEdit = true;
+        await setup.vault.write("note.md", "post-download edit");
+        await setup.store.update((data) => {
+          data.state.dirtyEntries["note.md"] = {
+            path: "note.md",
+            operation: "upsert",
+            recordedAt: 2,
+          };
+        });
+      }
+      return await originalRequest(options);
+    });
+
+    const result = await setup.manager().sync("foreground");
+
+    expect(result).toMatchObject({ status: "success", commitSha: acceptedSha, recovered: true });
+    expect(setup.vault.text("note.md")).toBe("post-download edit");
+    const state = await setup.store.load();
+    expect(state.state.dirtyEntries["note.md"]).toMatchObject({ recordedAt: 2 });
+  });
 });
 
 async function initializedFixture(initialRemoteFiles: Record<string, string | Uint8Array | ArrayBuffer>) {

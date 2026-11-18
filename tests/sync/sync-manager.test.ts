@@ -285,6 +285,13 @@ describe("SyncManager", () => {
         unconfirmedCommit: unconfirmedCommit(settings, [dirty("note.md")]),
       }),
       branchHeads: ["remote-b"],
+      remoteTree: [{
+        id: "blob-mobile",
+        name: "note.md",
+        type: "blob",
+        path: "note.md",
+        mode: "100644",
+      }],
     });
     fixture.remoteDiff.discover.mockResolvedValueOnce({
       changes: [{ type: "update", path: "note.md" }],
@@ -309,7 +316,9 @@ describe("SyncManager", () => {
     const state = await fixture.store.load();
     expect(state.state.unconfirmedCommit).toBeNull();
     expect(state.state.lastSyncedCommitSha).toBe("mobile-commit");
-    expect(state.state.trackedFiles).toEqual({ "note.md": tracked("mobile") });
+    expect(state.state.trackedFiles).toEqual({
+      "note.md": { blobId: "blob-mobile", mode: "100644", size: 0 },
+    });
     expect(state.state.dirtyEntries).toEqual({});
   });
 
@@ -326,6 +335,22 @@ describe("SyncManager", () => {
         unconfirmedCommit: unconfirmedCommit(settings, [capturedEntry]),
       }),
       branchHeads: ["mobile-commit"],
+      remoteTree: [
+        {
+          id: "blob-remote",
+          name: "note.md",
+          type: "blob",
+          path: "note.md",
+          mode: "100644",
+        },
+        {
+          id: "blob-conflict",
+          name: conflictPath,
+          type: "blob",
+          path: conflictPath,
+          mode: "100644",
+        },
+      ],
     });
     fixture.gitlab.listCommits.mockResolvedValueOnce([
       commitSummary(
@@ -353,13 +378,14 @@ describe("SyncManager", () => {
     });
     expect(fixture.planner.plan).not.toHaveBeenCalled();
     expect(fixture.gitlab.createCommit).not.toHaveBeenCalled();
-    expect(fixture.streamingApplier.applyStream).toHaveBeenCalledWith(
-      expect.objectContaining({ remoteSha: "mobile-commit" }),
-    );
+    expect(fixture.gitlab.getRawFile).toHaveBeenCalledWith("note.md", "mobile-commit");
     const state = await fixture.store.load();
     expect(state.state.unconfirmedCommit).toBeNull();
     expect(state.state.lastSyncedCommitSha).toBe("mobile-commit");
-    expect(state.state.trackedFiles).toEqual(remoteTree);
+    expect(state.state.trackedFiles).toEqual({
+      "note.md": { blobId: "blob-remote", mode: "100644", size: 0 },
+      [conflictPath]: { blobId: "blob-conflict", mode: "100644", size: 0 },
+    });
     expect(state.state.dirtyEntries).toEqual({});
   });
 
@@ -372,6 +398,13 @@ describe("SyncManager", () => {
         unconfirmedCommit: unconfirmedCommit(settings, [capturedEntry]),
       }),
       branchHeads: ["mobile-commit"],
+      remoteTree: [{
+        id: "blob-remote",
+        name: "note.md",
+        type: "blob",
+        path: "note.md",
+        mode: "100644",
+      }],
     });
     fixture.gitlab.listCommits.mockResolvedValueOnce([
       commitSummary("mobile-commit", "marker [sync-tx:sync-tx-1]", ["remote-a"]),
@@ -388,13 +421,13 @@ describe("SyncManager", () => {
       recovered: true,
     });
 
-    expect(fixture.streamingApplier.applyStream).toHaveBeenCalledWith(
-      expect.objectContaining({ changes: [] }),
-    );
+    expect(fixture.materializer.applyBytes).not.toHaveBeenCalled();
     const state = await fixture.store.load();
     expect(state.state.dirtyEntries["note.md"]).toEqual(postSnapshotEntry);
     expect(state.state.lastSyncedCommitSha).toBe("mobile-commit");
-    expect(state.state.trackedFiles).toEqual({ "note.md": tracked("remote") });
+    expect(state.state.trackedFiles).toEqual({
+      "note.md": { blobId: "blob-remote", mode: "100644", size: 0 },
+    });
   });
 
   it("clears an unconfirmed commit when history reaches the intended base without it", async () => {
@@ -1134,6 +1167,7 @@ function fakeVault(files: Record<string, string>) {
         }
         return { files: childFiles.sort(), folders: [...childFolders].sort() };
       },
+      exists: async (path: string) => Object.prototype.hasOwnProperty.call(files, path),
       readBinary: async (path: string) => new TextEncoder().encode(files[path]).buffer,
     },
   } as any;

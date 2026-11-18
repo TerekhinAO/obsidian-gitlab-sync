@@ -29,6 +29,7 @@ import { StreamingRemoteApplier } from "./remote-only-stream";
 import type {
   ByteMaterializeOperation,
   DirtyEntry,
+  DirtyOperation,
   GitLabSyncSettings,
   LocalSyncState,
   MaterializeOperation,
@@ -720,11 +721,19 @@ export class SyncManager {
   ): Promise<SyncResult> {
     this.setProgress(progress, "Updating local vault…");
     const remoteDiff = this.createRemoteDiffService(client);
+    const localBaseSha = data.state.lastSyncedCommitSha ?? intent.basedOnRemoteSha;
     const actual = await remoteDiff.discover({
-      baseSha: intent.basedOnRemoteSha,
+      baseSha: localBaseSha,
       remoteSha: remoteCommit.id,
       baseIndex: data.state.trackedFiles,
     });
+    // The persisted index must describe the recovered commit even when a dirty path was
+    // deliberately left on disk. Fetching the actual tree avoids compare-vs-tree drift.
+    const finalIndex = treeToTrackedFiles(
+      await client.getTree(remoteCommit.id),
+      this.isHardExcluded.bind(this),
+    );
+    const currentData = await this.options.stateStore.load();
     const captured = new Map(
       (intent.capturedDirtyEntries ?? []).map((entry) => [entry.path, entry]),
     );
@@ -733,23 +742,19 @@ export class SyncManager {
         ? [change.oldPath, change.newPath]
         : [change.path];
       return paths.every((path) => {
-        const current = data.state.dirtyEntries[normalizePath(path)];
+        const current = currentData.state.dirtyEntries[normalizePath(path)];
         const expected = captured.get(path);
         return current === undefined ||
           (expected !== undefined && sameDirtyEntry(current, expected));
       });
     });
 
-    const appliedIndex = await this.getJournal().suppress(async () => {
-      const applier = this.getStreamingApplier(client);
-      return await applier.applyStream({
-        changes,
-        remoteSha: remoteCommit.id,
-        baseIndex: actual.remoteTree ?? data.state.trackedFiles,
-      });
-    });
-    const finalIndex = actual.remoteTree ?? appliedIndex;
-
+    await this.applyRecoveredChangesSafely(
+      client,
+      remoteCommit.id,
+      changes,
+      captured,
+    );
     await this.options.stateStore.update((next) => {
       next.state.lastSyncedCommitSha = remoteCommit.id;
       next.state.trackedFiles = cloneTrackedFiles(finalIndex);
@@ -776,6 +781,115 @@ export class SyncManager {
       recovered: true,
       attempts: 1,
     };
+  }
+
+  private async applyRecoveredChangesSafely(
+    client: GitLabClientLike,
+    remoteSha: string,
+    changes: RemoteChange[],
+    captured: Map<string, DirtyEntry>,
+  ): Promise<void> {
+    if (!this.options.vault) {
+      throw new Error("Vault is required to recover a GitLab commit");
+    }
+
+    for (const change of changes) {
+      if (change.type === "delete") {
+        await this.recoverDeleteSafely(change.path, captured.get(change.path));
+        continue;
+      }
+
+      if (change.type === "rename") {
+        await this.recoverDeleteSafely(change.oldPath, captured.get(change.oldPath));
+        await this.recoverWriteSafely(
+          client,
+          remoteSha,
+          change.newPath,
+          captured.get(change.newPath),
+        );
+        continue;
+      }
+
+      await this.recoverWriteSafely(
+        client,
+        remoteSha,
+        change.path,
+        captured.get(change.path),
+      );
+    }
+  }
+
+  private async recoverWriteSafely(
+    client: GitLabClientLike,
+    remoteSha: string,
+    path: string,
+    captured: DirtyEntry | undefined,
+  ): Promise<void> {
+    const expected = await this.readOptionalLocalBytes(path);
+    const remoteBuffer = await client.getRawFile(path, remoteSha);
+    const beforeWrite = await this.readOptionalLocalBytes(path);
+    if (!sameOptionalBytes(expected, beforeWrite)) {
+      await this.markRecoveryDivergence(path, "upsert", captured);
+      return;
+    }
+
+    if (remoteBuffer === null) {
+      await this.recoverDeleteSafely(path, captured);
+      return;
+    }
+
+    const remoteBytes = new Uint8Array(remoteBuffer);
+    await this.getMaterializer().applyBytes([
+      { type: "write", path, bytes: remoteBytes },
+    ]);
+    const afterWrite = await this.readOptionalLocalBytes(path);
+    if (!sameOptionalBytes(afterWrite, remoteBytes)) {
+      await this.markRecoveryDivergence(path, "upsert", captured);
+    }
+  }
+
+  private async recoverDeleteSafely(
+    path: string,
+    captured: DirtyEntry | undefined,
+  ): Promise<void> {
+    const expected = await this.readOptionalLocalBytes(path);
+    await this.getMaterializer().applyBytes([{ type: "delete", path }]);
+    const afterDelete = await this.readOptionalLocalBytes(path);
+    if (
+      !sameOptionalBytes(expected, afterDelete) &&
+      afterDelete !== null
+    ) {
+      await this.markRecoveryDivergence(path, "upsert", captured);
+    }
+  }
+
+  private async readOptionalLocalBytes(path: string): Promise<Uint8Array | null> {
+    const vault = this.options.vault;
+    if (!vault || !(await vault.adapter.exists(path))) {
+      return null;
+    }
+    return new Uint8Array(await vault.adapter.readBinary(path));
+  }
+
+  private async markRecoveryDivergence(
+    path: string,
+    operation: DirtyOperation,
+    captured: DirtyEntry | undefined,
+  ): Promise<void> {
+    const normalized = normalizePath(path);
+    await this.options.stateStore.update((data) => {
+      const current = data.state.dirtyEntries[normalized];
+      if (
+        current === undefined ||
+        (captured !== undefined && sameDirtyEntry(current, captured))
+      ) {
+        data.state.dirtyEntries[normalized] = {
+          path: normalized,
+          operation,
+          recordedAt: this.now(),
+        };
+      }
+    });
   }
 
   private async applyRemoteOnlyPlan(
@@ -1361,6 +1475,17 @@ function sameGitLabTarget(
   return target.baseUrl === settings.gitlabBaseUrl &&
     target.projectPath === settings.projectPath &&
     target.branch === settings.branch;
+}
+
+function sameOptionalBytes(
+  left: Uint8Array | null,
+  right: Uint8Array | null,
+): boolean {
+  if (left === null || right === null) {
+    return left === right;
+  }
+  return left.byteLength === right.byteLength &&
+    left.every((byte, index) => byte === right[index]);
 }
 
 function cloneTrackedFiles(
