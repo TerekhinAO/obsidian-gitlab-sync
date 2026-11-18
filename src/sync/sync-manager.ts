@@ -825,11 +825,19 @@ export class SyncManager {
     path: string,
     captured: DirtyEntry | undefined,
   ): Promise<void> {
+    if (!(await this.canRecoverPathNow(path, captured))) {
+      return;
+    }
+
     const expected = await this.readOptionalLocalBytes(path);
     const remoteBuffer = await client.getRawFile(path, remoteSha);
     const beforeWrite = await this.readOptionalLocalBytes(path);
     if (!sameOptionalBytes(expected, beforeWrite)) {
       await this.markRecoveryDivergence(path, "upsert", captured);
+      return;
+    }
+
+    if (!(await this.canRecoverPathNow(path, captured))) {
       return;
     }
 
@@ -852,7 +860,15 @@ export class SyncManager {
     path: string,
     captured: DirtyEntry | undefined,
   ): Promise<void> {
+    if (!(await this.canRecoverPathNow(path, captured))) {
+      return;
+    }
+
     const expected = await this.readOptionalLocalBytes(path);
+    if (!(await this.canRecoverPathNow(path, captured))) {
+      return;
+    }
+
     await this.getMaterializer().applyBytes([{ type: "delete", path }]);
     const afterDelete = await this.readOptionalLocalBytes(path);
     if (
@@ -869,6 +885,17 @@ export class SyncManager {
       return null;
     }
     return new Uint8Array(await vault.adapter.readBinary(path));
+  }
+
+  private async canRecoverPathNow(
+    path: string,
+    captured: DirtyEntry | undefined,
+  ): Promise<boolean> {
+    const current = (await this.options.stateStore.load())
+      .state
+      .dirtyEntries[normalizePath(path)];
+    return current === undefined ||
+      (captured !== undefined && sameDirtyEntry(current, captured));
   }
 
   private async markRecoveryDivergence(

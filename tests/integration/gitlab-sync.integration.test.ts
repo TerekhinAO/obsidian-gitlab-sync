@@ -579,7 +579,122 @@ describe("GitLab sync integration", () => {
     const state = await setup.store.load();
     expect(state.state.dirtyEntries["note.md"]).toMatchObject({ recordedAt: 2 });
   });
+
+  it("rechecks dirty revisions before recovering a later updated file", async () => {
+    const setup = await initializedFixture({
+      "a.md": "base a",
+      "note.md": "base note",
+    });
+    const localBaseSha = setup.server.head;
+    await setup.server.desktopCommit({
+      "a.md": "remote a",
+      "note.md": "remote note",
+    }, `Sync vault from iPhone [sync-tx:later-update]`);
+    const acceptedSha = setup.server.head;
+    await seedUnconfirmed(setup, localBaseSha, "later-update");
+    const originalRequest = setup.server.requestUrl.bind(setup.server);
+    let injectedEdit = false;
+    requestUrlMock.mockImplementation(async (options: any) => {
+      if (
+        !injectedEdit &&
+        options.url.includes(`/repository/files/a.md/raw?`) &&
+        options.url.includes(`ref=${acceptedSha}`)
+      ) {
+        injectedEdit = true;
+        await setup.vault.write("note.md", "user edit");
+        await setup.store.update((data) => {
+          data.state.dirtyEntries["note.md"] = {
+            path: "note.md",
+            operation: "upsert",
+            recordedAt: 2,
+          };
+        });
+      }
+      return await originalRequest(options);
+    });
+
+    const result = await setup.manager().sync("foreground");
+
+    expect(result).toMatchObject({ status: "success", commitSha: acceptedSha, recovered: true });
+    expect(setup.vault.text("a.md")).toBe("remote a");
+    expect(setup.vault.text("note.md")).toBe("user edit");
+    const state = await setup.store.load();
+    expect(state.state.dirtyEntries["note.md"]).toMatchObject({ recordedAt: 2 });
+  });
+
+  it("rechecks dirty revisions before a later delete or rename path", async () => {
+    const setup = await initializedFixture({
+      "a.md": "base a",
+      "delete.md": "delete base",
+      "rename-old.md": "rename base",
+    });
+    const localBaseSha = setup.server.head;
+    await setup.server.desktopCommit({
+      "a.md": "remote a",
+      "delete.md": null,
+      "rename-old.md": null,
+      "rename-new.md": "remote renamed",
+    }, `Sync vault from iPhone [sync-tx:later-delete-rename]`);
+    const acceptedSha = setup.server.head;
+    await seedUnconfirmed(setup, localBaseSha, "later-delete-rename");
+    const originalRequest = setup.server.requestUrl.bind(setup.server);
+    let injectedEdit = false;
+    requestUrlMock.mockImplementation(async (options: any) => {
+      if (
+        !injectedEdit &&
+        options.url.includes(`/repository/files/a.md/raw?`) &&
+        options.url.includes(`ref=${acceptedSha}`)
+      ) {
+        injectedEdit = true;
+        await setup.vault.write("delete.md", "user delete edit");
+        await setup.vault.write("rename-new.md", "user rename edit");
+        await setup.store.update((data) => {
+          data.state.dirtyEntries["delete.md"] = {
+            path: "delete.md",
+            operation: "upsert",
+            recordedAt: 2,
+          };
+          data.state.dirtyEntries["rename-new.md"] = {
+            path: "rename-new.md",
+            operation: "upsert",
+            recordedAt: 2,
+          };
+        });
+      }
+      return await originalRequest(options);
+    });
+
+    const result = await setup.manager().sync("foreground");
+
+    expect(result).toMatchObject({ status: "success", commitSha: acceptedSha, recovered: true });
+    expect(setup.vault.text("delete.md")).toBe("user delete edit");
+    expect(setup.vault.text("rename-new.md")).toBe("user rename edit");
+    const state = await setup.store.load();
+    expect(state.state.dirtyEntries["delete.md"]).toMatchObject({ recordedAt: 2 });
+    expect(state.state.dirtyEntries["rename-new.md"]).toMatchObject({ recordedAt: 2 });
+  });
 });
+
+async function seedUnconfirmed(
+  setup: Awaited<ReturnType<typeof initializedFixture>>,
+  basedOnRemoteSha: string,
+  transactionId: string,
+): Promise<void> {
+  await setup.store.update((data) => {
+    data.state.unconfirmedCommit = {
+      transactionId,
+      basedOnRemoteSha,
+      target: {
+        baseUrl: setup.server.baseUrl,
+        projectPath: setup.server.projectPath,
+        branch: setup.server.branch,
+      },
+      capturedDirtyEntries: [],
+      createdAt: 1,
+    };
+    data.state.lastSyncedCommitSha = basedOnRemoteSha;
+  });
+}
 
 async function initializedFixture(initialRemoteFiles: Record<string, string | Uint8Array | ArrayBuffer>) {
   const server = await GitLabTestServer.create(initialRemoteFiles);

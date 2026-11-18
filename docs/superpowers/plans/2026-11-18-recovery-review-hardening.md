@@ -48,3 +48,4 @@
 - [x] Reload persisted dirty revisions after recovery network requests.
 - [x] Compare local bytes before and after each recovery write/download and preserve divergent paths as dirty.
 - [x] Cover accepted conflict commits and edits made during compare/download with production integration tests.
+- [x] Recheck each path's current dirty revision immediately before update, delete, and rename materialization.
