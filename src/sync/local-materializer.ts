@@ -6,6 +6,8 @@ import type {
   ByteMaterializeOperation,
   MaterializeOperation,
   PendingTransaction,
+  ProtectedByteMaterializeOperation,
+  ProtectedMaterializeOutcome,
 } from "./types";
 
 interface MaterializerVault {
@@ -14,6 +16,7 @@ interface MaterializerVault {
     exists(path: string): Promise<boolean>;
     mkdir(path: string): Promise<void>;
     writeBinary(path: string, data: ArrayBuffer): Promise<void>;
+    readBinary(path: string): Promise<ArrayBuffer>;
     remove(path: string): Promise<void>;
     list(path: string): Promise<{ files: string[]; folders: string[] }>;
     rmdir(path: string, recursive: boolean): Promise<void>;
@@ -69,6 +72,35 @@ export class LocalMaterializer {
       }
       await this.pruneEmptyParents(operations);
     });
+  }
+
+  async applyProtectedBytes(
+    operations: ProtectedByteMaterializeOperation[],
+  ): Promise<ProtectedMaterializeOutcome[]> {
+    const outcomes: ProtectedMaterializeOutcome[] = [];
+    await this.options.journal.suppress(async () => {
+      for (const operation of operations) {
+        await this.assertMaterializable(operation.path);
+        const applied = operation.type === "write"
+          ? await this.protectedWriteBytes(
+              operation.path,
+              arrayBufferFromBytes(operation.bytes),
+              operation.expectedBytes,
+            )
+          : await this.protectedDeleteBytes(operation.path, operation.expectedBytes);
+        outcomes.push({
+          path: normalizePath(operation.path),
+          operation: "upsert",
+          applied,
+        });
+      }
+      await this.pruneEmptyParents(
+        operations
+          .filter((operation, index) => operation.type === "delete" && outcomes[index]?.applied)
+          .map((operation) => operation as { type: "delete"; path: string }),
+      );
+    });
+    return outcomes;
   }
 
   async recoverPendingTransaction(): Promise<boolean> {
@@ -133,6 +165,110 @@ export class LocalMaterializer {
       await this.options.vault.adapter.writeBinary(normalized, data);
       await this.removeIfExists(tempPath);
     }
+  }
+
+  private async protectedWriteBytes(
+    path: string,
+    data: ArrayBuffer,
+    expectedBytes: Uint8Array | null,
+  ): Promise<boolean> {
+    const normalized = normalizePath(path);
+    await this.ensureParentFolders(normalized);
+
+    if (this.options.vault.adapter.rename === undefined) {
+      // A direct write cannot fence a user edit between the precheck and write.
+      // Fail closed and leave the path dirty for the next safe resolution instead.
+      return false;
+    }
+
+    const tempPath = this.tempSiblingPath(normalized);
+    await this.options.vault.adapter.writeBinary(tempPath, data);
+    const current = await this.readOptionalBytes(normalized);
+    if (!sameOptionalBytes(current, expectedBytes)) {
+      await this.removeIfExists(tempPath);
+      return false;
+    }
+
+    const backupPath = this.protectedBackupPath(normalized);
+    let movedOriginal = false;
+    if (current !== null) {
+      await this.options.vault.adapter.rename(normalized, backupPath);
+      movedOriginal = true;
+      const moved = await this.readOptionalBytes(backupPath);
+      if (!sameOptionalBytes(moved, expectedBytes)) {
+        if (!(await this.options.vault.adapter.exists(normalized))) {
+          await this.options.vault.adapter.rename(backupPath, normalized);
+        } else {
+          await this.removeIfExists(backupPath);
+        }
+        await this.removeIfExists(tempPath);
+        return false;
+      }
+    }
+
+    if (await this.options.vault.adapter.exists(normalized)) {
+      if (movedOriginal) {
+        await this.removeIfExists(backupPath);
+      }
+      await this.removeIfExists(tempPath);
+      return false;
+    }
+
+    try {
+      await this.options.vault.adapter.rename(tempPath, normalized);
+    } catch {
+      if (await this.options.vault.adapter.exists(normalized)) {
+        if (movedOriginal) {
+          await this.removeIfExists(backupPath);
+        }
+        await this.removeIfExists(tempPath);
+        return false;
+      }
+      await this.options.vault.adapter.writeBinary(normalized, data);
+      await this.removeIfExists(tempPath);
+    }
+
+    if (movedOriginal) {
+      await this.removeIfExists(backupPath);
+    }
+    return true;
+  }
+
+  private async protectedDeleteBytes(
+    path: string,
+    expectedBytes: Uint8Array | null,
+  ): Promise<boolean> {
+    const normalized = normalizePath(path);
+    const current = await this.readOptionalBytes(normalized);
+    if (!sameOptionalBytes(current, expectedBytes)) {
+      return false;
+    }
+    if (current === null) {
+      return true;
+    }
+    if (this.options.vault.adapter.rename === undefined) {
+      return false;
+    }
+
+    const backupPath = this.protectedBackupPath(normalized);
+    await this.options.vault.adapter.rename(normalized, backupPath);
+    const moved = await this.readOptionalBytes(backupPath);
+    if (!sameOptionalBytes(moved, expectedBytes)) {
+      if (await this.options.vault.adapter.exists(normalized)) {
+        await this.removeIfExists(backupPath);
+      } else {
+        await this.options.vault.adapter.rename(backupPath, normalized);
+      }
+      return false;
+    }
+
+    if (await this.options.vault.adapter.exists(normalized)) {
+      await this.removeIfExists(backupPath);
+      return false;
+    }
+
+    await this.removeIfExists(backupPath);
+    return true;
   }
 
   private async delete(path: string): Promise<void> {
@@ -220,6 +356,13 @@ export class LocalMaterializer {
     }
   }
 
+  private async readOptionalBytes(path: string): Promise<Uint8Array | null> {
+    if (!(await this.options.vault.adapter.exists(path))) {
+      return null;
+    }
+    return new Uint8Array(await this.options.vault.adapter.readBinary(path));
+  }
+
   private async assertMaterializable(path: string): Promise<void> {
     const normalized = normalizePath(path);
     if (this.isHardExcluded(normalized)) {
@@ -247,6 +390,21 @@ export class LocalMaterializer {
     const fileName = slash === -1 ? normalized : normalized.slice(slash + 1);
     return `${directory}.${fileName}.gitlab-gitless-sync-${this.now().toString(36)}.tmp`;
   }
+
+  private protectedBackupPath(path: string): string {
+    return `${this.tempSiblingPath(path)}.backup`;
+  }
+}
+
+function sameOptionalBytes(
+  left: Uint8Array | null,
+  right: Uint8Array | null,
+): boolean {
+  if (left === null || right === null) {
+    return left === right;
+  }
+  return left.byteLength === right.byteLength &&
+    left.every((byte, index) => byte === right[index]);
 }
 
 function parentPath(path: string): string {

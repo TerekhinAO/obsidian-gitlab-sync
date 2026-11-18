@@ -1042,6 +1042,12 @@ function managerFixture(options: {
     applyTransaction: vi.fn(async () => {
       events.push("apply");
     }),
+    applyProtectedBytes: vi.fn(async (operations: Array<{ path: string }>) =>
+      operations.map((operation) => ({
+        path: operation.path,
+        operation: "upsert" as const,
+        applied: true,
+      }))),
     applyBytes: vi.fn(async () => undefined),
   };
   const streamingApplier = {

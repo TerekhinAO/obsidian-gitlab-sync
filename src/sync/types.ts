@@ -57,6 +57,25 @@ export type ByteMaterializeOperation =
   | { type: "write"; path: string; bytes: Uint8Array }
   | { type: "delete"; path: string };
 
+export type ProtectedByteMaterializeOperation =
+  | {
+      type: "write";
+      path: string;
+      bytes: Uint8Array;
+      expectedBytes: Uint8Array | null;
+    }
+  | {
+      type: "delete";
+      path: string;
+      expectedBytes: Uint8Array | null;
+    };
+
+export interface ProtectedMaterializeOutcome {
+  path: string;
+  operation: DirtyOperation;
+  applied: boolean;
+}
+
 export interface PendingTransaction {
   transactionId: string;
   committedSha: string;

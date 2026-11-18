@@ -70,6 +70,13 @@ function fakeVault(initialFiles: Record<string, Uint8Array> = {}) {
       folders.add(parent(path));
       files.set(path, new Uint8Array(data.slice(0)));
     }),
+    readBinary: vi.fn(async (path: string) => {
+      const content = files.get(path);
+      if (content === undefined) {
+        throw new Error(`missing file: ${path}`);
+      }
+      return arrayBuffer(content);
+    }),
     remove: vi.fn(async (path: string) => {
       calls.push(["remove", path]);
       files.delete(path);
@@ -434,6 +441,49 @@ describe("LocalMaterializer", () => {
     const data = await fixture.store.load();
     expect(data.state.dirtyEntries["note.md"]).toEqual(postSnapshotEntry);
     expect(data.state.lastSyncedCommitSha).toBe("commit-sha");
+  });
+
+  it("preserves a user write that lands while a protected remote write stages its temp file", async () => {
+    const fixture = materializer({ initialFiles: { "note.md": bytes("old") } });
+    const write = fixture.vault.adapter.writeBinary.getMockImplementation()!;
+    fixture.vault.adapter.writeBinary.mockImplementation(async (path: string, data: ArrayBuffer) => {
+      await write(path, data);
+      if (path !== "note.md") {
+        await write("note.md", arrayBuffer(bytes("user edit")));
+      }
+    });
+
+    const outcome = await fixture.materializer.applyProtectedBytes([{
+      type: "write",
+      path: "note.md",
+      bytes: bytes("remote"),
+      expectedBytes: bytes("old"),
+    }]);
+
+    expect(outcome).toEqual([{ path: "note.md", operation: "upsert", applied: false }]);
+    expect(fixture.read("note.md")).toEqual(bytes("user edit"));
+    expect(fixture.calls.map(([name]) => name)).not.toContain("rename");
+  });
+
+  it("preserves a user write that lands while a protected delete moves the original", async () => {
+    const fixture = materializer({ initialFiles: { "note.md": bytes("old") } });
+    const write = fixture.vault.adapter.writeBinary.getMockImplementation()!;
+    const rename = fixture.vault.adapter.rename.getMockImplementation()!;
+    fixture.vault.adapter.rename.mockImplementation(async (path: string, newPath: string) => {
+      if (path === "note.md") {
+        await write("note.md", arrayBuffer(bytes("user edit")));
+      }
+      await rename(path, newPath);
+    });
+
+    const outcome = await fixture.materializer.applyProtectedBytes([{
+      type: "delete",
+      path: "note.md",
+      expectedBytes: bytes("old"),
+    }]);
+
+    expect(outcome).toEqual([{ path: "note.md", operation: "upsert", applied: false }]);
+    expect(fixture.read("note.md")).toEqual(bytes("user edit"));
   });
 
   it("reports no recovery work when there is no pending transaction", async () => {

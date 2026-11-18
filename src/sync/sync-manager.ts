@@ -35,6 +35,8 @@ import type {
   MaterializeOperation,
   PendingTransaction,
   PluginData,
+  ProtectedByteMaterializeOperation,
+  ProtectedMaterializeOutcome,
   RemoteApply,
   TrackedFile,
   UnconfirmedCommit,
@@ -134,6 +136,9 @@ interface JournalLike {
 interface MaterializerLike {
   apply(operations: MaterializeOperation[]): Promise<void>;
   applyBytes(operations: ByteMaterializeOperation[]): Promise<void>;
+  applyProtectedBytes(
+    operations: ProtectedByteMaterializeOperation[],
+  ): Promise<ProtectedMaterializeOutcome[]>;
   applyTransaction(transaction: PendingTransaction): Promise<void>;
   recoverPendingTransaction(): Promise<boolean>;
 }
@@ -847,9 +852,16 @@ export class SyncManager {
     }
 
     const remoteBytes = new Uint8Array(remoteBuffer);
-    await this.getMaterializer().applyBytes([
-      { type: "write", path, bytes: remoteBytes },
-    ]);
+    const [outcome] = await this.getMaterializer().applyProtectedBytes([{
+      type: "write",
+      path,
+      bytes: remoteBytes,
+      expectedBytes: expected,
+    }]);
+    if (outcome === undefined || !outcome.applied) {
+      await this.markRecoveryDivergence(path, "upsert", captured);
+      return;
+    }
     const afterWrite = await this.readOptionalLocalBytes(path);
     if (!sameOptionalBytes(afterWrite, remoteBytes)) {
       await this.markRecoveryDivergence(path, "upsert", captured);
@@ -869,7 +881,15 @@ export class SyncManager {
       return;
     }
 
-    await this.getMaterializer().applyBytes([{ type: "delete", path }]);
+    const [outcome] = await this.getMaterializer().applyProtectedBytes([{
+      type: "delete",
+      path,
+      expectedBytes: expected,
+    }]);
+    if (outcome === undefined || !outcome.applied) {
+      await this.markRecoveryDivergence(path, "upsert", captured);
+      return;
+    }
     const afterDelete = await this.readOptionalLocalBytes(path);
     if (
       !sameOptionalBytes(expected, afterDelete) &&

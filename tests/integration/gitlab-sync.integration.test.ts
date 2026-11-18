@@ -228,6 +228,12 @@ describe("GitLab sync integration", () => {
         applyTransaction: async () => {
           throw new Error("terminated during materialization");
         },
+        applyProtectedBytes: async (operations: Array<{ path: string }>) =>
+          operations.map((operation) => ({
+            path: operation.path,
+            operation: "upsert" as const,
+            applied: true,
+          })),
       },
     });
 
@@ -672,6 +678,56 @@ describe("GitLab sync integration", () => {
     const state = await setup.store.load();
     expect(state.state.dirtyEntries["delete.md"]).toMatchObject({ recordedAt: 2 });
     expect(state.state.dirtyEntries["rename-new.md"]).toMatchObject({ recordedAt: 2 });
+  });
+
+  it("preserves an edit that lands while protected recovery replaces a file", async () => {
+    const setup = await initializedFixture({ "note.md": "old" });
+    const localBaseSha = setup.server.head;
+    await setup.server.desktopCommit({
+      "note.md": "remote text",
+    }, `Sync vault from iPhone [sync-tx:replace-race]`);
+    const acceptedSha = setup.server.head;
+    await seedUnconfirmed(setup, localBaseSha, "replace-race");
+    const adapter = setup.vault.vault.adapter as any;
+    const originalRename = adapter.rename.bind(adapter);
+    adapter.rename = async (path: string, newPath: string) => {
+      if (path === "note.md" && newPath.includes(".backup")) {
+        await setup.vault.write("note.md", "user replace edit");
+      }
+      await originalRename(path, newPath);
+    };
+
+    const result = await setup.manager().sync("foreground");
+
+    expect(result).toMatchObject({ status: "success", commitSha: acceptedSha, recovered: true });
+    expect(setup.vault.text("note.md")).toBe("user replace edit");
+    const state = await setup.store.load();
+    expect(state.state.dirtyEntries["note.md"]).toMatchObject({ operation: "upsert" });
+  });
+
+  it("preserves an edit that lands while protected recovery deletes a file", async () => {
+    const setup = await initializedFixture({ "note.md": "old" });
+    const localBaseSha = setup.server.head;
+    await setup.server.desktopCommit({
+      "note.md": null,
+    }, `Sync vault from iPhone [sync-tx:delete-race]`);
+    const acceptedSha = setup.server.head;
+    await seedUnconfirmed(setup, localBaseSha, "delete-race");
+    const adapter = setup.vault.vault.adapter as any;
+    const originalRename = adapter.rename.bind(adapter);
+    adapter.rename = async (path: string, newPath: string) => {
+      if (path === "note.md" && newPath.includes(".backup")) {
+        await setup.vault.write("note.md", "user delete edit");
+      }
+      await originalRename(path, newPath);
+    };
+
+    const result = await setup.manager().sync("foreground");
+
+    expect(result).toMatchObject({ status: "success", commitSha: acceptedSha, recovered: true });
+    expect(setup.vault.text("note.md")).toBe("user delete edit");
+    const state = await setup.store.load();
+    expect(state.state.dirtyEntries["note.md"]).toMatchObject({ operation: "upsert" });
   });
 });
 
