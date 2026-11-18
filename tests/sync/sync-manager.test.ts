@@ -121,7 +121,9 @@ describe("SyncManager", () => {
     await expect(fixture.manager.sync("foreground")).resolves.toMatchObject({ status: "success" });
 
     expect(fixture.gitlab.createCommit).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Sync vault from Mobile User (Mac) foreground" }),
+      expect.objectContaining({
+        message: expect.stringMatching(/^Sync vault from Mobile User \(Mac\) foreground \[sync-tx:[a-z0-9-]+\]$/),
+      }),
     );
   });
 
@@ -136,8 +138,41 @@ describe("SyncManager", () => {
     await expect(fixture.manager.sync("manual")).resolves.toMatchObject({ status: "success" });
 
     expect(fixture.gitlab.createCommit).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Sync vault from iPhone" }),
+      expect.objectContaining({
+        message: expect.stringMatching(/^Sync vault from iPhone \[sync-tx:[a-z0-9-]+\]$/),
+      }),
     );
+  });
+
+  it("persists a transaction intent before GitLab commit creation and clears it after confirmation", async () => {
+    const fixture = managerFixture({
+      data: initializedData({ dirtyEntries: { "note.md": dirty("note.md") } }),
+    });
+    fixture.planner.plan.mockResolvedValueOnce(localCommitPlan("remote-a", "note.md"));
+    const observed: { state?: PluginData; message?: string } = {};
+    fixture.gitlab.createCommit.mockImplementationOnce(async (...args: unknown[]) => {
+      observed.state = await fixture.store.load();
+      observed.message = (args[0] as { message: string }).message;
+      expect(observed.message).toMatch(/\[sync-tx:[a-z0-9-]+\]$/);
+      return commit("commit-a", ["remote-a"]);
+    });
+
+    await expect(fixture.manager.sync("manual")).resolves.toMatchObject({
+      status: "success",
+      commitSha: "commit-a",
+    });
+
+    const intent = observed.state?.state.unconfirmedCommit;
+    expect(intent).not.toBeNull();
+    const messageId = observed.message?.match(/\[sync-tx:([a-z0-9-]+)\]$/)?.[1];
+    expect(intent?.transactionId).toBe(messageId);
+    expect(intent?.basedOnRemoteSha).toBe("remote-a");
+    expect(intent?.plan.actions).toEqual(localCommitPlan("remote-a", "note.md").actions);
+
+    const finalState = await fixture.store.load();
+    expect(finalState.state.unconfirmedCommit).toBeNull();
+    expect(finalState.state.pendingTransaction).toBeNull();
+    expect(finalState.state.lastSyncedCommitSha).toBe("commit-a");
   });
 
   it("recovers a pending transaction before reading the GitLab branch", async () => {

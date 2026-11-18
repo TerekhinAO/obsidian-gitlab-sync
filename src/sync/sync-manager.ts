@@ -28,6 +28,7 @@ import type {
   PluginData,
   RemoteApply,
   TrackedFile,
+  UnconfirmedCommit,
 } from "./types";
 
 export interface SyncResult {
@@ -504,9 +505,18 @@ export class SyncManager {
         continue;
       }
 
+      const transactionId = this.newTransactionId();
+      const message = this.commitMessage(input.trigger, input.settings, transactionId);
+      await this.persistUnconfirmedCommit({
+        transactionId,
+        basedOnRemoteSha: remoteSha,
+        plan: clonePlan(plan),
+        createdAt: this.now(),
+      });
+
       this.setProgress(input.progress, "Creating GitLab commit…");
       const createdCommit = await input.client.createCommit({
-        message: this.commitMessage(input.trigger, input.settings),
+        message,
         actions: plan.actions,
       });
       const finalizedPlan = await this.planForActualCreatedCommit(
@@ -726,6 +736,7 @@ export class SyncManager {
   private async persistPendingTransaction(transaction: PendingTransaction): Promise<void> {
     await this.options.stateStore.update((data) => {
       data.state.pendingTransaction = transaction;
+      data.state.unconfirmedCommit = null;
     });
   }
 
@@ -1025,12 +1036,26 @@ export class SyncManager {
     return visibleFiles.sort();
   }
 
-  private commitMessage(trigger: SyncTrigger, settings: GitLabSyncSettings): string {
+  private commitMessage(
+    trigger: SyncTrigger,
+    settings: GitLabSyncSettings,
+    transactionId: string,
+  ): string {
     const label = commitDeviceLabel(settings.authorName, this.platform());
     if (trigger === "audit" || trigger === "foreground" || trigger === "background") {
-      return `Sync vault from ${label} ${trigger}`;
+      return `Sync vault from ${label} ${trigger} [sync-tx:${transactionId}]`;
     }
-    return `Sync vault from ${label}`;
+    return `Sync vault from ${label} [sync-tx:${transactionId}]`;
+  }
+
+  private newTransactionId(): string {
+    return `${this.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  private async persistUnconfirmedCommit(intent: UnconfirmedCommit): Promise<void> {
+    await this.options.stateStore.update((data) => {
+      data.state.unconfirmedCommit = clonePlanIntent(intent);
+    });
   }
 
   private platform(): DevicePlatform {
@@ -1113,6 +1138,26 @@ function versionFromArrayBuffer(buffer: ArrayBuffer | null): VersionState {
     return { exists: false, bytes: null };
   }
   return { exists: true, bytes: new Uint8Array(buffer) };
+}
+
+function clonePlan(plan: SyncPlan): SyncPlan {
+  return {
+    ...plan,
+    actions: plan.actions.map((action) => ({ ...action })),
+    materializeAfterCommit: plan.materializeAfterCommit.map((operation) => ({ ...operation })),
+    materializeWithoutCommit: plan.materializeWithoutCommit.map((operation) => ({ ...operation })),
+    streamChanges: plan.streamChanges.map((change) => ({ ...change })),
+    nextTrackedFiles: cloneTrackedFiles(plan.nextTrackedFiles),
+    acknowledgedDirtyPaths: [...plan.acknowledgedDirtyPaths],
+    conflictPaths: [...plan.conflictPaths],
+  };
+}
+
+function clonePlanIntent(intent: UnconfirmedCommit): UnconfirmedCommit {
+  return {
+    ...intent,
+    plan: clonePlan(intent.plan),
+  };
 }
 
 function cloneTrackedFiles(
