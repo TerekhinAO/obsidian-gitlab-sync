@@ -14,6 +14,7 @@ import type {
   CreateCommitInput,
   CreatedGitLabCommit,
   GitLabBranch,
+  GitLabCommitSummary,
   GitLabCompareResult,
   GitLabPayloadWarning,
   GitLabProject,
@@ -173,6 +174,12 @@ export class GitLabClient {
       page = this.header(response.headers, "X-Next-Page") ?? "";
     }
     return names;
+  }
+
+  async listCommits(ref: string, page = "1"): Promise<GitLabCommitSummary[]> {
+    return await this.requestJson<GitLabCommitSummary[]>(
+      `/repository/commits?ref_name=${encodeURIComponent(ref)}&per_page=100&page=${encodeURIComponent(page)}`,
+    );
   }
 
   async getTree(ref: string): Promise<GitLabTreeItem[]> {

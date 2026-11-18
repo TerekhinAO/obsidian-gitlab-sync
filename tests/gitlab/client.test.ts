@@ -144,6 +144,30 @@ describe("GitLabClient", () => {
     expect(project.default_branch).toBeNull();
   });
 
+  it("lists commit metadata from a repository branch", async () => {
+    fake.queue({
+      status: 200,
+      json: [{
+        id: "commit-2",
+        title: "Sync vault from iPhone",
+        message: "Sync vault from iPhone",
+        parent_ids: ["commit-1"],
+      }],
+    });
+
+    const commits = await new GitLabClient(settings, "token").listCommits("feature/mobile");
+
+    expect(commits).toEqual([{
+      id: "commit-2",
+      title: "Sync vault from iPhone",
+      message: "Sync vault from iPhone",
+      parent_ids: ["commit-1"],
+    }]);
+    expect(fake.calls[0].url).toBe(
+      "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/commits?ref_name=feature%2Fmobile&per_page=100&page=1",
+    );
+  });
+
   it("lists branch names across pages", async () => {
     fake.queue({ status: 200, json: [{ name: "main" }, { name: "dev" }], headers: { "X-Next-Page": "2" } });
     fake.queue({ status: 200, json: [{ name: "release" }], headers: { "X-Next-Page": "" } });

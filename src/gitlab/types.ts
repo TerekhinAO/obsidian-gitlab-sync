@@ -20,6 +20,13 @@ export interface GitLabBranch {
   };
 }
 
+export interface GitLabCommitSummary {
+  id: string;
+  parent_ids: string[];
+  title: string;
+  message: string;
+}
+
 export interface GitLabDiff {
   old_path: string;
   new_path: string;
