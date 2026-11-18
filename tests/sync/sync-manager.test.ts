@@ -242,6 +242,22 @@ describe("SyncManager", () => {
     expect((await fixture.store.load()).state.lastSyncedCommitSha).toBe("committed-before-restart");
   });
 
+  it("holds the sync lock while startup recovery is running", async () => {
+    const fixture = managerFixture({
+      data: initializedData({ pendingTransaction: pendingTransaction("commit-sha") }),
+    });
+    const locking: boolean[] = [];
+    fixture.materializer.recoverPendingTransaction.mockImplementationOnce(async () => {
+      locking.push(fixture.manager.isSyncing());
+      return true;
+    });
+
+    await expect(fixture.manager.recoverIfNeeded()).resolves.toBe(true);
+
+    expect(locking).toEqual([true]);
+    expect(fixture.manager.isSyncing()).toBe(false);
+  });
+
   it("reconciles an accepted mobile commit through a fresh safe plan", async () => {
     const fixture = managerFixture({
       data: initializedData({

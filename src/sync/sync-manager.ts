@@ -212,6 +212,19 @@ export class SyncManager {
   }
 
   async recoverIfNeeded(): Promise<boolean> {
+    if (this.syncing) {
+      return false;
+    }
+
+    this.syncing = true;
+    try {
+      return await this.recoverPendingTransaction();
+    } finally {
+      this.syncing = false;
+    }
+  }
+
+  private async recoverPendingTransaction(): Promise<boolean> {
     return await this.getMaterializer().recoverPendingTransaction();
   }
 
@@ -375,7 +388,7 @@ export class SyncManager {
   ): Promise<SyncResult> {
     try {
       this.setProgress(progress, "Checking GitLab…");
-      const recovered = await this.recoverIfNeeded();
+      const recovered = await this.recoverPendingTransaction();
       if (recovered) {
         this.setProgress(progress, "Sync complete");
         this.options.notice?.("Sync complete");
