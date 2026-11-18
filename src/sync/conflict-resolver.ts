@@ -1,4 +1,3 @@
-import diff3Merge from "diff3";
 import type { GitLabCommitAction } from "../gitlab/types";
 import type { LocalSnapshotEntry, VersionState } from "./local-snapshot";
 import type { ConflictStrategy, MaterializeOperation, TrackedFile } from "./types";
@@ -485,40 +484,130 @@ function diffOperations(oldLines: string[], newLines: string[]): DiffOperation[]
     newEnd -= 1;
   }
 
-  const middleOld = oldLines.slice(prefixLength, oldEnd);
-  const middleNew = newLines.slice(prefixLength, newEnd);
-  const table = lcsTable(middleOld, middleNew);
-  const operations: DiffOperation[] = oldLines
-    .slice(0, prefixLength)
-    .map((line) => ({ type: "same", line }));
-  const middle: DiffOperation[] = [];
-  let oldIndex = 0;
-  let newIndex = 0;
+  const operations: DiffOperation[] = [];
+  for (let index = 0; index < prefixLength; index += 1) {
+    operations.push({ type: "same", line: oldLines[index] });
+  }
 
-  while (oldIndex < middleOld.length && newIndex < middleNew.length) {
-    if (middleOld[oldIndex] === middleNew[newIndex]) {
-      middle.push({ type: "same", line: middleOld[oldIndex] });
-      oldIndex += 1;
-      newIndex += 1;
-    } else if ((table[oldIndex][newIndex + 1] ?? 0) >= (table[oldIndex + 1]?.[newIndex] ?? 0)) {
-      middle.push({ type: "insert", line: middleNew[newIndex] });
-      newIndex += 1;
-    } else {
-      middle.push({ type: "delete", line: middleOld[oldIndex] });
-      oldIndex += 1;
+  const middle = myersDiffOperations(
+    oldLines.slice(prefixLength, oldEnd),
+    newLines.slice(prefixLength, newEnd),
+  ) ?? positionalDiffOperations(
+    oldLines.slice(prefixLength, oldEnd),
+    newLines.slice(prefixLength, newEnd),
+  );
+  for (const operation of normalizeReplacementOrder(middle)) {
+    operations.push(operation);
+  }
+  for (let index = newEnd; index < newLines.length; index += 1) {
+    operations.push({ type: "same", line: newLines[index] });
+  }
+  return operations;
+}
+
+function myersDiffOperations(
+  oldLines: string[],
+  newLines: string[],
+): DiffOperation[] | null {
+  if (oldLines.length === 0 && newLines.length === 0) {
+    return [];
+  }
+
+  const maximumDistance = 1_024;
+  const maximumPossibleDistance = oldLines.length + newLines.length;
+  const offset = maximumDistance;
+  const values = new Int32Array((maximumDistance * 2) + 3);
+  const trace: Int32Array[] = [];
+
+  const searchLimit = Math.min(maximumPossibleDistance, maximumDistance);
+  for (let distance = 0; distance <= searchLimit; distance += 1) {
+    trace.push(values.slice());
+    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+      let x: number;
+      if (
+        diagonal === -distance ||
+        (diagonal !== distance && values[offset + diagonal - 1] < values[offset + diagonal + 1])
+      ) {
+        x = values[offset + diagonal + 1];
+      } else {
+        x = values[offset + diagonal - 1] + 1;
+      }
+      let y = x - diagonal;
+      while (x < oldLines.length && y < newLines.length && oldLines[x] === newLines[y]) {
+        x += 1;
+        y += 1;
+      }
+      values[offset + diagonal] = x;
+      if (x === oldLines.length && y === newLines.length) {
+        return backtrackMyersOperations(trace, oldLines, newLines, offset);
+      }
     }
   }
-  while (oldIndex < middleOld.length) {
-    middle.push({ type: "delete", line: middleOld[oldIndex] });
-    oldIndex += 1;
-  }
-  while (newIndex < middleNew.length) {
-    middle.push({ type: "insert", line: middleNew[newIndex] });
-    newIndex += 1;
+
+  return null;
+}
+
+function backtrackMyersOperations(
+  trace: Int32Array[],
+  oldLines: string[],
+  newLines: string[],
+  offset: number,
+): DiffOperation[] {
+  let x = oldLines.length;
+  let y = newLines.length;
+  const operations: DiffOperation[] = [];
+
+  for (let distance = trace.length - 1; distance >= 1; distance -= 1) {
+    const values = trace[distance];
+    const diagonal = x - y;
+    const movedDown = diagonal === -distance ||
+      (diagonal !== distance && values[offset + diagonal - 1] < values[offset + diagonal + 1]);
+
+    if (movedDown) {
+      operations.push({ type: "insert", line: newLines[y - 1] });
+      y -= 1;
+    } else {
+      operations.push({ type: "delete", line: oldLines[x - 1] });
+      x -= 1;
+    }
+
+    while (x > 0 && y > 0 && oldLines[x - 1] === newLines[y - 1]) {
+      operations.push({ type: "same", line: oldLines[x - 1] });
+      x -= 1;
+      y -= 1;
+    }
   }
 
-  operations.push(...normalizeReplacementOrder(middle));
-  operations.push(...newLines.slice(newEnd).map((line) => ({ type: "same", line }) as const));
+  while (x > 0 && y > 0 && oldLines[x - 1] === newLines[y - 1]) {
+    operations.push({ type: "same", line: oldLines[x - 1] });
+    x -= 1;
+    y -= 1;
+  }
+
+  operations.reverse();
+  return operations;
+}
+
+function positionalDiffOperations(
+  oldLines: string[],
+  newLines: string[],
+): DiffOperation[] {
+  const operations: DiffOperation[] = [];
+  const length = Math.max(oldLines.length, newLines.length);
+
+  for (let index = 0; index < length; index += 1) {
+    if (index < oldLines.length && index < newLines.length && oldLines[index] === newLines[index]) {
+      operations.push({ type: "same", line: oldLines[index] });
+      continue;
+    }
+    if (index < oldLines.length) {
+      operations.push({ type: "delete", line: oldLines[index] });
+    }
+    if (index < newLines.length) {
+      operations.push({ type: "insert", line: newLines[index] });
+    }
+  }
+
   return operations;
 }
 
@@ -617,45 +706,10 @@ function mergeTextVersions(
   localText: string,
   remoteText: string,
 ): string | null {
-  const regions = diff3Merge(
-    localText.split("\n"),
-    baseText.split("\n"),
-    remoteText.split("\n"),
-  );
-  const mergedLines: string[] = [];
+  const baseLines = baseText.split("\n");
+  const localEdits = diffTextEdits(baseLines, localText.split("\n"));
+  const remoteEdits = diffTextEdits(baseLines, remoteText.split("\n"));
 
-  for (const region of regions) {
-    if (region.conflict) {
-      const conflict = region.conflict;
-      const locallyMerged = mergeAdjacentEdits(
-        conflict.o,
-        diffTextEdits(conflict.o, conflict.a),
-        diffTextEdits(conflict.o, conflict.b),
-      );
-      if (locallyMerged === null) {
-        return null;
-      }
-      mergedLines.push(...locallyMerged);
-    }
-    if (region.ok) {
-      mergedLines.push(...region.ok);
-    }
-  }
-
-  return mergedLines.join("\n");
-}
-
-interface TextEdit {
-  start: number;
-  end: number;
-  lines: string[];
-}
-
-function mergeAdjacentEdits(
-  baseLines: string[],
-  localEdits: TextEdit[],
-  remoteEdits: TextEdit[],
-): string[] | null {
   if (editsConflict(localEdits, remoteEdits)) {
     return null;
   }
@@ -669,16 +723,69 @@ function mergeAdjacentEdits(
     if (edit.start < cursor) {
       return null;
     }
-    mergedLines.push(...baseLines.slice(cursor, edit.start));
-    mergedLines.push(...edit.lines);
+    for (let index = cursor; index < edit.start; index += 1) {
+      mergedLines.push(baseLines[index]);
+    }
+    for (const line of edit.lines) {
+      mergedLines.push(line);
+    }
     cursor = edit.end;
   }
 
-  mergedLines.push(...baseLines.slice(cursor));
-  return mergedLines;
+  for (let index = cursor; index < baseLines.length; index += 1) {
+    mergedLines.push(baseLines[index]);
+  }
+  return mergedLines.join("\n");
+}
+
+interface TextEdit {
+  start: number;
+  end: number;
+  lines: string[];
 }
 
 function diffTextEdits(baseLines: string[], changedLines: string[]): TextEdit[] {
+  let prefixLength = 0;
+  while (
+    prefixLength < baseLines.length &&
+    prefixLength < changedLines.length &&
+    baseLines[prefixLength] === changedLines[prefixLength]
+  ) {
+    prefixLength += 1;
+  }
+
+  let baseEnd = baseLines.length;
+  let changedEnd = changedLines.length;
+  while (
+    baseEnd > prefixLength &&
+    changedEnd > prefixLength &&
+    baseLines[baseEnd - 1] === changedLines[changedEnd - 1]
+  ) {
+    baseEnd -= 1;
+    changedEnd -= 1;
+  }
+
+  const middleBase = baseLines.slice(prefixLength, baseEnd);
+  const middleChanged = changedLines.slice(prefixLength, changedEnd);
+  if (middleBase.length * middleChanged.length > 4_000_000) {
+    if (middleBase.length === 0 && middleChanged.length === 0) {
+      return [];
+    }
+    return [{
+      start: prefixLength,
+      end: baseEnd,
+      lines: middleChanged,
+    }];
+  }
+
+  return diffMiddleTextEdits(middleBase, middleChanged).map((edit) => ({
+    ...edit,
+    start: edit.start + prefixLength,
+    end: edit.end + prefixLength,
+  }));
+}
+
+function diffMiddleTextEdits(baseLines: string[], changedLines: string[]): TextEdit[] {
   const lcs = lcsTable(baseLines, changedLines);
   const edits: TextEdit[] = [];
   let baseIndex = 0;
@@ -713,10 +820,17 @@ function diffTextEdits(baseLines: string[], changedLines: string[]): TextEdit[] 
         ? lcs[baseIndex + 1]?.[changedIndex] ?? 0
         : -1;
 
-      if (changedIndex < changedLines.length && skipChanged >= skipBase) {
+      if (
+        changedIndex < changedLines.length &&
+        skipChanged > skipBase
+      ) {
         replacement.push(changedLines[changedIndex]);
         changedIndex += 1;
       } else {
+        if (changedIndex < changedLines.length && skipChanged === skipBase) {
+          replacement.push(changedLines[changedIndex]);
+          changedIndex += 1;
+        }
         baseIndex += 1;
       }
     }

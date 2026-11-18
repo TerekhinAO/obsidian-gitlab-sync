@@ -502,6 +502,36 @@ describe("ConflictResolver", () => {
     expect(conflictContent).toContain("- GitLab: - проговорить про важность hard db");
   });
 
+  it("keeps a remote insertion anchored after an ambiguously replaced local line", async () => {
+    const plan = await new ConflictResolver({ strategy: "auto-remote" }).resolve({
+      snapshots: [snapshot(
+        "note.md",
+        present(["b", "b", "c"].join("\n")),
+        present(["a", "b", "c"].join("\n")),
+      )],
+      remote: {
+        "note.md": present(["a", "X", "b", "c"].join("\n")),
+      },
+      trackedFiles: {},
+      now,
+      deviceName: "iPhone",
+    });
+    const merged = ["b", "X", "b", "c"].join("\n");
+
+    expect(plan.commitActions).toEqual([{
+      action: "update",
+      file_path: "note.md",
+      content: base64(merged),
+      encoding: "base64",
+    }]);
+    expect(plan.materializeOperations).toEqual([{
+      type: "write",
+      path: "note.md",
+      contentBase64: base64(merged),
+    }]);
+    expect(plan.conflictPaths).toEqual([]);
+  });
+
   it("falls back to local when auto-merge text changes overlap", async () => {
     const plan = await new ConflictResolver({ strategy: "auto-local" }).resolve({
       snapshots: [snapshot("note.md", present("local line"), present("base line"))],
@@ -589,6 +619,41 @@ describe("ConflictResolver", () => {
       "  two",
     ]);
   });
+
+  it("generates a readable report for large notes with a long common tail", async () => {
+    const tail = Array.from({ length: 150_000 }, (_, index) => `common ${index}`);
+    const base = ["base", ...tail].join("\n");
+    const local = ["local", ...tail].join("\n");
+    const remote = ["remote", ...tail].join("\n");
+    const plan = await new ConflictResolver({ strategy: "remote" }).resolve({
+      snapshots: [snapshot("large.md", present(local), present(base))],
+      remote: { "large.md": present(remote) },
+      trackedFiles: {},
+      now,
+      deviceName: "iPhone",
+    });
+
+    expect(plan.conflictPaths).toHaveLength(1);
+  }, 10_000);
+
+  it("generates a conflict report without quadratic LCS storage for large different notes", async () => {
+    const lines = (prefix: string) => Array.from(
+      { length: 4_000 },
+      (_, index) => `${prefix} ${index}`,
+    );
+    const base = lines("base").join("\n");
+    const local = lines("local").join("\n");
+    const remote = lines("remote").join("\n");
+    const plan = await new ConflictResolver({ strategy: "remote" }).resolve({
+      snapshots: [snapshot("large.md", present(local), present(base))],
+      remote: { "large.md": present(remote) },
+      trackedFiles: {},
+      now,
+      deviceName: "iPhone",
+    });
+
+    expect(plan.conflictPaths).toHaveLength(1);
+  }, 5_000);
 });
 
 function present(text: string): VersionState {
