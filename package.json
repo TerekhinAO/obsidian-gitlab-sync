@@ -25,6 +25,7 @@
   ],
   "license": "AGPL-3.0-only",
   "devDependencies": {
+    "@types/diff3": "^0.0.2",
     "@types/node": "^22.10.5",
     "@types/proxyquire": "^1.3.31",
     "@types/sinon": "^17.0.4",
@@ -44,6 +45,7 @@
   },
   "dependencies": {
     "@zip.js/zip.js": "^2.7.60",
+    "diff3": "^0.0.4",
     "ignore": "^7.0.6"
   }
 }

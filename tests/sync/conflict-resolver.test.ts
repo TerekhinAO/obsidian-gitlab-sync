@@ -461,6 +461,47 @@ describe("ConflictResolver", () => {
     expect(plan.conflictPaths).toEqual([`note — conflict iPhone ${conflictStamp}.md`]);
   });
 
+  it("does not silently replace remote bullet edits with stale empty mobile bullets", async () => {
+    const base = [
+      "##### Ко встрече Lead Sync",
+      "",
+      "after",
+    ].join("\n");
+    const local = [
+      "##### Ко встрече Lead Sync",
+      "- обновить устройства - куча уязвимостей",
+      "- ",
+      "- ",
+      "- ",
+      "after",
+    ].join("\n");
+    const remote = [
+      "##### Ко встрече Lead Sync",
+      "- обновить устройства - куча уязвимостей",
+      "- проговорить про важность hard db",
+      "- 2 pagers - подготовка",
+      "- как дела у нас с инфрой и со стендами",
+      "after",
+    ].join("\n");
+    const plan = await new ConflictResolver({ strategy: "auto-remote" }).resolve({
+      snapshots: [snapshot("note.md", present(local), present(base))],
+      remote: { "note.md": present(remote) },
+      trackedFiles: {},
+      now,
+      deviceName: "iPhone",
+    });
+
+    expect(plan.materializeOperations[0]).toEqual({
+      type: "write",
+      path: "note.md",
+      contentBase64: base64(remote),
+    });
+    expect(plan.conflictPaths).toEqual([`note — conflict iPhone ${conflictStamp}.md`]);
+    const conflictContent = decodeBase64(actionContent(plan.commitActions[0]));
+    expect(conflictContent).toContain("+ iPhone: - ");
+    expect(conflictContent).toContain("- GitLab: - проговорить про важность hard db");
+  });
+
   it("falls back to local when auto-merge text changes overlap", async () => {
     const plan = await new ConflictResolver({ strategy: "auto-local" }).resolve({
       snapshots: [snapshot("note.md", present("local line"), present("base line"))],
@@ -519,6 +560,34 @@ describe("ConflictResolver", () => {
     });
 
     expect(plan.conflictPaths).toEqual([`README — conflict iPhone ${conflictStamp}-3`]);
+  });
+
+  it("renders an inserted line without treating subsequent shifted lines as changes", async () => {
+    const plan = await new ConflictResolver({ strategy: "auto-remote" }).resolve({
+      snapshots: [snapshot(
+        "note.md",
+        present(["one", "inserted by iPhone", "same", "two"].join("\n")),
+        present(["one", "base", "same", "two"].join("\n")),
+      )],
+      remote: {
+        "note.md": present(["one", "same", "two"].join("\n")),
+      },
+      trackedFiles: {},
+      now,
+      deviceName: "iPhone",
+    });
+    const conflictContent = decodeBase64(actionContent(plan.commitActions[0]));
+    const diff = conflictContent
+      .split("```diff\n", 2)[1]
+      ?.split("\n```", 1)[0]
+      ?.split("\n") ?? [];
+
+    expect(diff).toEqual([
+      "  one",
+      "+ iPhone: inserted by iPhone",
+      "  same",
+      "  two",
+    ]);
   });
 });
 

@@ -1,3 +1,4 @@
+import diff3Merge from "diff3";
 import type { GitLabCommitAction } from "../gitlab/types";
 import type { LocalSnapshotEntry, VersionState } from "./local-snapshot";
 import type { ConflictStrategy, MaterializeOperation, TrackedFile } from "./types";
@@ -445,27 +446,100 @@ function deletedSideMarker(path: string, keptSide: ConflictStrategy, deviceName:
 function diffLines(remoteText: string, localText: string, deviceName: string): string[] {
   const remoteLines = remoteText.split("\n");
   const localLines = localText.split("\n");
-  const max = Math.max(remoteLines.length, localLines.length);
+  const operations = diffOperations(remoteLines, localLines);
   const lines: string[] = [];
 
-  for (let index = 0; index < max; index += 1) {
-    const remoteLine = remoteLines[index];
-    const localLine = localLines[index];
-    if (remoteLine === localLine) {
-      if (remoteLine !== undefined) {
-        lines.push(`  ${remoteLine}`);
-      }
-      continue;
-    }
-    if (remoteLine !== undefined) {
-      lines.push(`- GitLab: ${remoteLine}`);
-    }
-    if (localLine !== undefined) {
-      lines.push(`+ ${deviceName}: ${localLine}`);
+  for (const operation of operations) {
+    if (operation.type === "same") {
+      lines.push(`  ${operation.line}`);
+    } else if (operation.type === "delete") {
+      lines.push(`- GitLab: ${operation.line}`);
+    } else {
+      lines.push(`+ ${deviceName}: ${operation.line}`);
     }
   }
 
   return lines.length === 0 ? ["  No textual line differences found."] : lines;
+}
+
+type DiffOperation = { type: "same" | "delete" | "insert"; line: string };
+
+function diffOperations(oldLines: string[], newLines: string[]): DiffOperation[] {
+  let prefixLength = 0;
+  while (
+    prefixLength < oldLines.length &&
+    prefixLength < newLines.length &&
+    oldLines[prefixLength] === newLines[prefixLength]
+  ) {
+    prefixLength += 1;
+  }
+
+  let oldEnd = oldLines.length;
+  let newEnd = newLines.length;
+  while (
+    oldEnd > prefixLength &&
+    newEnd > prefixLength &&
+    oldLines[oldEnd - 1] === newLines[newEnd - 1]
+  ) {
+    oldEnd -= 1;
+    newEnd -= 1;
+  }
+
+  const middleOld = oldLines.slice(prefixLength, oldEnd);
+  const middleNew = newLines.slice(prefixLength, newEnd);
+  const table = lcsTable(middleOld, middleNew);
+  const operations: DiffOperation[] = oldLines
+    .slice(0, prefixLength)
+    .map((line) => ({ type: "same", line }));
+  const middle: DiffOperation[] = [];
+  let oldIndex = 0;
+  let newIndex = 0;
+
+  while (oldIndex < middleOld.length && newIndex < middleNew.length) {
+    if (middleOld[oldIndex] === middleNew[newIndex]) {
+      middle.push({ type: "same", line: middleOld[oldIndex] });
+      oldIndex += 1;
+      newIndex += 1;
+    } else if ((table[oldIndex][newIndex + 1] ?? 0) >= (table[oldIndex + 1]?.[newIndex] ?? 0)) {
+      middle.push({ type: "insert", line: middleNew[newIndex] });
+      newIndex += 1;
+    } else {
+      middle.push({ type: "delete", line: middleOld[oldIndex] });
+      oldIndex += 1;
+    }
+  }
+  while (oldIndex < middleOld.length) {
+    middle.push({ type: "delete", line: middleOld[oldIndex] });
+    oldIndex += 1;
+  }
+  while (newIndex < middleNew.length) {
+    middle.push({ type: "insert", line: middleNew[newIndex] });
+    newIndex += 1;
+  }
+
+  operations.push(...normalizeReplacementOrder(middle));
+  operations.push(...newLines.slice(newEnd).map((line) => ({ type: "same", line }) as const));
+  return operations;
+}
+
+function normalizeReplacementOrder(operations: DiffOperation[]): DiffOperation[] {
+  const normalized: DiffOperation[] = [];
+  let index = 0;
+
+  while (index < operations.length) {
+    if (
+      operations[index].type === "insert" &&
+      operations[index + 1]?.type === "delete"
+    ) {
+      normalized.push(operations[index + 1], operations[index]);
+      index += 2;
+      continue;
+    }
+    normalized.push(operations[index]);
+    index += 1;
+  }
+
+  return normalized;
 }
 
 function versionText(version: VersionState): string {
@@ -538,21 +612,50 @@ function autoMergeText(
   return merged === null ? null : new TextEncoder().encode(merged);
 }
 
+function mergeTextVersions(
+  baseText: string,
+  localText: string,
+  remoteText: string,
+): string | null {
+  const regions = diff3Merge(
+    localText.split("\n"),
+    baseText.split("\n"),
+    remoteText.split("\n"),
+  );
+  const mergedLines: string[] = [];
+
+  for (const region of regions) {
+    if (region.conflict) {
+      const conflict = region.conflict;
+      const locallyMerged = mergeAdjacentEdits(
+        conflict.o,
+        diffTextEdits(conflict.o, conflict.a),
+        diffTextEdits(conflict.o, conflict.b),
+      );
+      if (locallyMerged === null) {
+        return null;
+      }
+      mergedLines.push(...locallyMerged);
+    }
+    if (region.ok) {
+      mergedLines.push(...region.ok);
+    }
+  }
+
+  return mergedLines.join("\n");
+}
+
 interface TextEdit {
   start: number;
   end: number;
   lines: string[];
 }
 
-function mergeTextVersions(
-  baseText: string,
-  localText: string,
-  remoteText: string,
-): string | null {
-  const baseLines = baseText.split("\n");
-  const localEdits = diffTextEdits(baseLines, localText.split("\n"));
-  const remoteEdits = diffTextEdits(baseLines, remoteText.split("\n"));
-
+function mergeAdjacentEdits(
+  baseLines: string[],
+  localEdits: TextEdit[],
+  remoteEdits: TextEdit[],
+): string[] | null {
   if (editsConflict(localEdits, remoteEdits)) {
     return null;
   }
@@ -572,7 +675,7 @@ function mergeTextVersions(
   }
 
   mergedLines.push(...baseLines.slice(cursor));
-  return mergedLines.join("\n");
+  return mergedLines;
 }
 
 function diffTextEdits(baseLines: string[], changedLines: string[]): TextEdit[] {
