@@ -650,6 +650,7 @@ function pluginData(settings: GitLabSyncSettings): PluginData {
       trackedFiles: {},
       dirtyEntries: {},
       pendingTransaction: null,
+      unconfirmedCommit: null,
       lastSyncAt: null,
       lastSyncResult: "never",
       remoteBackoffUntil: null,

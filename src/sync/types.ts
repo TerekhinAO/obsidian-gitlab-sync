@@ -2,6 +2,8 @@ export type DirtyOperation = "upsert" | "delete";
 export type LogLevel = "off" | "error" | "info" | "debug";
 export type ConflictStrategy = "remote" | "local" | "auto-remote" | "auto-local";
 
+import type { SyncPlan } from "./sync-planner";
+
 export interface DirtyEntry {
   path: string;
   operation: DirtyOperation;
@@ -67,6 +69,13 @@ export interface PendingTransaction {
   createdAt: number;
 }
 
+export interface UnconfirmedCommit {
+  transactionId: string;
+  basedOnRemoteSha: string;
+  plan: SyncPlan;
+  createdAt: number;
+}
+
 export interface LocalSyncState {
   schemaVersion: 3;
   initialized: boolean;
@@ -74,6 +83,7 @@ export interface LocalSyncState {
   trackedFiles: Record<string, TrackedFile>;
   dirtyEntries: Record<string, DirtyEntry>;
   pendingTransaction: PendingTransaction | null;
+  unconfirmedCommit: UnconfirmedCommit | null;
   lastSyncAt: number | null;
   lastSyncResult: "never" | "success" | "conflict" | "error";
   remoteBackoffUntil: number | null;

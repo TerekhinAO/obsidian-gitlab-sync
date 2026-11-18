@@ -172,6 +172,54 @@ describe("StateStore", () => {
     expect(data.state.trackedFiles).toEqual({ "a.md": { blobId: "blob-a", mode: "100644", size: 1 } });
   });
 
+  it("loads schema-3 state without an unconfirmed commit as null", async () => {
+    const { plugin } = fakePlugin({
+      settings: { gitlabBaseUrl: "https://gitlab.example.com" },
+      state: {
+        schemaVersion: 3,
+        initialized: true,
+        lastSyncedCommitSha: "commit-a",
+      },
+    });
+
+    const data = await new StateStore(plugin).load();
+
+    expect(data.state.schemaVersion).toBe(3);
+    expect(data.state.unconfirmedCommit).toBeNull();
+  });
+
+  it("round-trips an unconfirmed commit intent", async () => {
+    const { plugin } = fakePlugin();
+    const store = new StateStore(plugin);
+    const unconfirmedCommit = {
+      transactionId: "sync-tx-1",
+      basedOnRemoteSha: "remote-a",
+      plan: {
+        basedOnRemoteSha: "remote-a",
+        actions: [{
+          action: "create" as const,
+          file_path: "a.md",
+          content: "YQ==",
+          encoding: "base64" as const,
+        }],
+        materializeAfterCommit: [],
+        materializeWithoutCommit: [],
+        streamChanges: [],
+        nextTrackedFiles: { "a.md": { blobId: "blob-a", mode: "100644", size: 1 } },
+        acknowledgedDirtyPaths: ["a.md"],
+        conflictPaths: [],
+      },
+      createdAt: 123,
+    };
+
+    await store.update((data) => {
+      data.state.unconfirmedCommit = unconfirmedCommit;
+    });
+
+    const data = await store.load();
+    expect(data.state.unconfirmedCommit).toEqual(unconfirmedCommit);
+  });
+
   it("round-trips a persisted remoteApply resume point", async () => {
     const { plugin } = fakePlugin();
     const store = new StateStore(plugin);

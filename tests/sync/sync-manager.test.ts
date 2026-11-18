@@ -243,6 +243,7 @@ describe("SyncManager", () => {
       lastSyncedCommitSha: "remote-a",
       trackedFiles: { "desktop.md": tracked("stream") },
       pendingTransaction: null,
+      unconfirmedCommit: null,
       lastSyncResult: "success",
     });
   });
@@ -813,6 +814,7 @@ function pluginData(state: Partial<LocalSyncState>): PluginData {
       remoteBackoffReason: null,
       remoteApply: null,
       ...state,
+      unconfirmedCommit: state.unconfirmedCommit ?? null,
     },
   };
 }

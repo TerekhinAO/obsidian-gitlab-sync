@@ -49,6 +49,7 @@ export class StateStore {
         remoteBackoffReason: raw?.state?.remoteBackoffReason ?? null,
         // Schema 2 → 3 only adds the nullable `remoteApply` field; no data rewrite is needed.
         remoteApply: raw?.state?.remoteApply ?? null,
+        unconfirmedCommit: raw?.state?.unconfirmedCommit ?? null,
         schemaVersion: 3,
       },
     };
@@ -68,6 +69,7 @@ export class StateStore {
         remoteBackoffUntil: data.state.remoteBackoffUntil ?? null,
         remoteBackoffReason: data.state.remoteBackoffReason ?? null,
         remoteApply: data.state.remoteApply ?? null,
+        unconfirmedCommit: data.state.unconfirmedCommit ?? null,
         schemaVersion: 3,
       },
     };
