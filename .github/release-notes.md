@@ -16,3 +16,4 @@ Local test candidate: crash-safe and conflict-preserving mobile sync recovery.
 - Preserves intact rollback backups when protected replacement ownership is ambiguous.
 - Retries transient conflict-copy recovery failures instead of allowing the next sync to delete the conflict copy.
 - Retries new-file recovery when another plugin creates or moves the target path during protected writes.
+- Records and verifies exact race fingerprints before replacing a file created by another plugin during recovery retry.
