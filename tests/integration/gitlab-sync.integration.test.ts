@@ -505,6 +505,43 @@ describe("GitLab sync integration", () => {
     expect((await setup.store.load()).state.unconfirmedCommit).toBeNull();
   });
 
+  it("retries when another plugin creates an empty file at a new recovery path", async () => {
+    const setup = await initializedFixture({ "note.md": "base" });
+    const localBaseSha = setup.server.head;
+    await setup.server.desktopCommit({ "note.md": "remote text" });
+    const remoteBaseSha = setup.server.head;
+    await setup.writeDirty("note.md", "local text");
+    const conflictPath = `note — conflict iPhone ${conflictStamp}.md`;
+    await setup.server.desktopCommit({
+      [conflictPath]: "local text",
+    }, `Sync vault from iPhone [sync-tx:plugin-race]`);
+    const acceptedSha = setup.server.head;
+    await seedUnconfirmed(setup, localBaseSha, "plugin-race");
+    const originalCreateBinary = setup.vault.vault.createBinary.bind(setup.vault.vault);
+    let raceOnce = true;
+    setup.vault.vault.createBinary = async (path: string, data: ArrayBuffer) => {
+      if (path === conflictPath && raceOnce) {
+        raceOnce = false;
+        await setup.vault.write(path, "");
+        throw new Error("file already exists");
+      }
+      return await originalCreateBinary(path, data);
+    };
+
+    const blocked = await setup.manager().sync("foreground");
+
+    expect(blocked).toMatchObject({ status: "error" });
+    expect(setup.server.commitActions).toEqual([]);
+    expect((await setup.store.load()).state.unconfirmedCommit?.transactionId).toBe("plugin-race");
+
+    setup.vault.vault.createBinary = originalCreateBinary;
+    const retried = await setup.manager().sync("foreground");
+
+    expect(retried).toMatchObject({ status: "success", commitSha: acceptedSha, recovered: true });
+    expect(setup.server.commitActions).toEqual([]);
+    expect(setup.vault.text(conflictPath)).toBe("local text");
+  });
+
   it("does not overwrite an edit made while recovery compares commits", async () => {
     const setup = await initializedFixture({ "note.md": "base" });
     const localBaseSha = setup.server.head;
