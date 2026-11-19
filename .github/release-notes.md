@@ -17,3 +17,4 @@ Local test candidate: crash-safe and conflict-preserving mobile sync recovery.
 - Retries transient conflict-copy recovery failures instead of allowing the next sync to delete the conflict copy.
 - Fail closed when any unknown local file appears at a new recovery path; keep the GitLab copy recoverable until that file is moved or removed.
 - Report detailed protected-write failure reasons and keep recovery intent across repeated external races.
+- Resume partial multi-file recovery when an already written path exactly matches the accepted GitLab commit.
