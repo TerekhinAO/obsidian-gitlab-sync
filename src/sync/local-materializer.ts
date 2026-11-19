@@ -419,10 +419,14 @@ export class LocalMaterializer {
       await this.options.vault.adapter.rename(backups[backups.length - 1]!, normalized);
     }
 
-    for (const backup of backups) {
-      // If the original already exists, it is either the completed protected
-      // result or a newer user write; in both cases that file wins and the
-      // rollback copy is no longer the authoritative version.
+    if (await this.options.vault.adapter.exists(normalized)) {
+      // The original may be a completed result, a genuine user edit, or our own
+      // partial install. Ownership cannot be proven, so preserve the intact
+      // backup as the recovery copy instead of deleting the last good bytes.
+      return;
+    }
+
+    for (const backup of backups.slice(0, -1)) {
       await this.removeIfExists(backup);
     }
   }

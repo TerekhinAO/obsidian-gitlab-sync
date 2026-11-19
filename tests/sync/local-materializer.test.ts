@@ -579,6 +579,41 @@ describe("LocalMaterializer", () => {
     expect(fixture.read(backups.files.find((path) => path.includes(".note.md.gitlab-gitless-sync-"))!)).toEqual(bytes("old"));
   });
 
+  it("preserves an ambiguous rollback backup on the next retry", async () => {
+    const fixture = materializer({ initialFiles: { "note.md": bytes("old") } });
+    const create = fixture.vault.adapter.createBinary.getMockImplementation()!;
+    let failOnce = true;
+    fixture.vault.adapter.createBinary.mockImplementation(async (path: string) => {
+      if (failOnce) {
+        failOnce = false;
+        await fixture.vault.adapter.writeBinary(path, arrayBuffer(bytes("re")));
+        throw new Error("interrupted");
+      }
+      return await create(path, arrayBuffer(bytes("remote")));
+    });
+
+    const failed = await fixture.materializer.applyProtectedBytes([{
+      type: "write",
+      path: "note.md",
+      bytes: bytes("remote"),
+      expectedBytes: bytes("old"),
+    }]);
+    const retried = await fixture.materializer.applyProtectedBytes([{
+      type: "write",
+      path: "note.md",
+      bytes: bytes("remote"),
+      expectedBytes: bytes("old"),
+    }]);
+
+    expect(failed[0]?.applied).toBe(false);
+    expect(retried[0]?.applied).toBe(false);
+    const backup = (await fixture.vault.adapter.list("")).files
+      .find((path) => path.includes(".note.md.gitlab-gitless-sync-"));
+    expect(backup).toBeDefined();
+    expect(fixture.read(backup!)).toEqual(bytes("old"));
+    expect(fixture.read("note.md")).toEqual(bytes("re"));
+  });
+
   it("restores an interrupted protected backup before retrying a path", async () => {
     const backupPath = ".note.md.gitlab-gitless-sync-1234.tmp.backup";
     const fixture = materializer({
