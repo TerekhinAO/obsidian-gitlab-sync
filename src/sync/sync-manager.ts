@@ -848,7 +848,14 @@ export class SyncManager {
     }
 
     const expected = await this.readOptionalLocalBytes(path);
-    if (!(await this.matchesPrePostFingerprint(intent, path, expected))) {
+    const fingerprintMatches = await this.matchesPrePostFingerprint(intent, path, expected);
+    const raceMatches = await this.matchesRecoveryRace(intent, path, expected);
+    if (!fingerprintMatches && !raceMatches) {
+      if (expected !== null && intent.localContentFingerprints?.[normalizePath(path)] === null) {
+        // The path was absent before POST, but an unexplained file exists now.
+        // Keep the durable intent instead of letting a later sync overwrite it.
+        throw new Error(`Recovery diverged at new GitLab file: ${path}`);
+      }
       await this.markRecoveryDivergence(path, "upsert", captured);
       return;
     }
@@ -880,8 +887,10 @@ export class SyncManager {
       if (expected === null) {
         // This path was absent at recovery start. Any failure now is either an
         // infrastructure error or another plugin racing us (for example Folder
-        // Notes). Keep the durable intent and retry instead of letting the next
-        // normal sync interpret the missing conflict copy as deletion.
+        // Notes). Record the racing bytes so only that exact race can be
+        // replaced on retry; a later user edit will produce a different
+        // fingerprint and remain protected.
+        await this.recordRecoveryRace(intent, path, afterFailedWrite);
         throw new Error(`Failed to recover GitLab file: ${path}`);
       }
       await this.markRecoveryDivergence(path, "upsert", captured);
@@ -961,6 +970,35 @@ export class SyncManager {
     }
 
     return fingerprints;
+  }
+
+  private async recordRecoveryRace(
+    intent: UnconfirmedCommit,
+    path: string,
+    bytes: Uint8Array | null,
+  ): Promise<void> {
+    const normalized = normalizePath(path);
+    const fingerprint = await this.localFingerprint(bytes);
+    await this.options.stateStore.update((data) => {
+      const current = data.state.unconfirmedCommit;
+      if (current?.transactionId !== intent.transactionId) {
+        return;
+      }
+      current.recoveryRaces ??= {};
+      current.recoveryRaces[normalized] = fingerprint;
+    });
+  }
+
+  private async matchesRecoveryRace(
+    intent: UnconfirmedCommit,
+    path: string,
+    current: Uint8Array | null,
+  ): Promise<boolean> {
+    const expected = intent.recoveryRaces?.[normalizePath(path)];
+    if (expected === undefined) {
+      return false;
+    }
+    return expected === await this.localFingerprint(current);
   }
 
   private async matchesPrePostFingerprint(

@@ -97,6 +97,8 @@ export interface UnconfirmedCommit {
   };
   capturedDirtyEntries?: DirtyEntry[];
   localContentFingerprints?: Record<string, string | null>;
+  /** Fingerprints of files that appeared during a failed protected recovery write. */
+  recoveryRaces?: Record<string, string | null>;
   createdAt: number;
 }
 

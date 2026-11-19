@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GitLabClient } from "../../src/gitlab/client";
 import { GitLabRequestScheduler } from "../../src/gitlab/request-scheduler";
 import { BootstrapService } from "../../src/sync/bootstrap-service";
+import { calculateGitBlobId } from "../../src/sync/conflict-resolver";
 import { ChangeJournal } from "../../src/sync/change-journal";
 import { SyncManager } from "../../src/sync/sync-manager";
 import { StateStore } from "../../src/sync/state-store";
@@ -516,7 +517,10 @@ describe("GitLab sync integration", () => {
       [conflictPath]: "local text",
     }, `Sync vault from iPhone [sync-tx:plugin-race]`);
     const acceptedSha = setup.server.head;
-    await seedUnconfirmed(setup, localBaseSha, "plugin-race");
+    await seedUnconfirmed(setup, localBaseSha, "plugin-race", {
+      "note.md": await calculateGitBlobId(bytes("local text")),
+      [conflictPath]: null,
+    });
     const originalCreateBinary = setup.vault.vault.createBinary.bind(setup.vault.vault);
     let raceOnce = true;
     setup.vault.vault.createBinary = async (path: string, data: ArrayBuffer) => {
@@ -540,6 +544,42 @@ describe("GitLab sync integration", () => {
     expect(retried).toMatchObject({ status: "success", commitSha: acceptedSha, recovered: true });
     expect(setup.server.commitActions).toEqual([]);
     expect(setup.vault.text(conflictPath)).toBe("local text");
+  });
+
+  it("does not replace a user edit that appears after a recorded plugin race", async () => {
+    const setup = await initializedFixture({ "note.md": "base" });
+    const localBaseSha = setup.server.head;
+    await setup.server.desktopCommit({ "note.md": "remote text" });
+    const remoteBaseSha = setup.server.head;
+    await setup.writeDirty("note.md", "local text");
+    const conflictPath = `note — conflict iPhone ${conflictStamp}.md`;
+    await setup.server.desktopCommit({
+      [conflictPath]: "local text",
+    }, `Sync vault from iPhone [sync-tx:plugin-race-user-edit]`);
+    await seedUnconfirmed(setup, localBaseSha, "plugin-race-user-edit", {
+      [conflictPath]: null,
+    });
+    const originalCreateBinary = setup.vault.vault.createBinary.bind(setup.vault.vault);
+    let raceOnce = true;
+    setup.vault.vault.createBinary = async (path: string, data: ArrayBuffer) => {
+      if (path === conflictPath && raceOnce) {
+        raceOnce = false;
+        await setup.vault.write(path, "");
+        throw new Error("file already exists");
+      }
+      return await originalCreateBinary(path, data);
+    };
+    await expect(setup.manager().sync("foreground")).resolves.toMatchObject({ status: "error" });
+    setup.vault.vault.createBinary = originalCreateBinary;
+    await setup.vault.write(conflictPath, "user edit");
+
+    const result = await setup.manager().sync("foreground");
+
+    expect(result).toMatchObject({ status: "error" });
+    expect(setup.vault.text(conflictPath)).toBe("user edit");
+    expect(setup.server.commitActions).toEqual([]);
+    expect((await setup.store.load()).state.unconfirmedCommit?.transactionId)
+      .toBe("plugin-race-user-edit");
   });
 
   it("does not overwrite an edit made while recovery compares commits", async () => {
@@ -888,6 +928,7 @@ async function seedUnconfirmed(
   setup: Awaited<ReturnType<typeof initializedFixture>>,
   basedOnRemoteSha: string,
   transactionId: string,
+  localContentFingerprints?: Record<string, string | null>,
 ): Promise<void> {
   await setup.store.update((data) => {
     data.state.unconfirmedCommit = {
@@ -899,6 +940,7 @@ async function seedUnconfirmed(
         branch: setup.server.branch,
       },
       capturedDirtyEntries: [],
+      localContentFingerprints,
       createdAt: 1,
     };
     data.state.lastSyncedCommitSha = basedOnRemoteSha;
