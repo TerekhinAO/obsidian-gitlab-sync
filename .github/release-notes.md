@@ -1,4 +1,4 @@
-Local test candidate: crash-safe mobile sync recovery.
+Local test candidate: crash-safe and conflict-preserving mobile sync recovery.
 
 - Persists a content-less transaction intent before creating a GitLab commit.
 - Tags commits with a unique transaction id and recovers accepted commits from GitLab history without creating duplicates.
@@ -9,3 +9,9 @@ Local test candidate: crash-safe mobile sync recovery.
 - Prevents remote-only resume from advancing the base when a dirty path was skipped.
 - Makes conflict reports linear and memory-bounded while preserving safe three-way merge behavior.
 - Publishes the installable Obsidian bundle to `dist/obsidian-plugin/gitlab-gitless-sync/` on every build.
+
+- Validates settings before persisting updates so an empty GitLab URL cannot make the plugin unloadable.
+- Uses topological GitLab history ordering to avoid false transaction absence after merges.
+- Captures exact pre-POST content fingerprints and refuses recovery when local files changed while Obsidian was closed.
+- Preserves intact rollback backups when protected replacement ownership is ambiguous.
+- Retries transient conflict-copy recovery failures instead of allowing the next sync to delete the conflict copy.
