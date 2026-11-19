@@ -17,3 +17,4 @@ Local test candidate: crash-safe and conflict-preserving mobile sync recovery.
 - Retries transient conflict-copy recovery failures instead of allowing the next sync to delete the conflict copy.
 - Retries new-file recovery when another plugin creates or moves the target path during protected writes.
 - Records and verifies exact race fingerprints before replacing a file created by another plugin during recovery retry.
+- Keeps recovery intent when a recorded plugin race repeats across multiple retries.
