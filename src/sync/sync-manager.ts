@@ -139,6 +139,7 @@ interface MaterializerLike {
   applyProtectedBytes(
     operations: ProtectedByteMaterializeOperation[],
   ): Promise<ProtectedMaterializeOutcome[]>;
+  recoverProtectedBackups(path: string): Promise<void>;
   applyTransaction(transaction: PendingTransaction): Promise<void>;
   recoverPendingTransaction(): Promise<boolean>;
 }
@@ -830,6 +831,7 @@ export class SyncManager {
     path: string,
     captured: DirtyEntry | undefined,
   ): Promise<void> {
+    await this.getMaterializer().recoverProtectedBackups(path);
     if (!(await this.canRecoverPathNow(path, captured))) {
       return;
     }
@@ -872,6 +874,7 @@ export class SyncManager {
     path: string,
     captured: DirtyEntry | undefined,
   ): Promise<void> {
+    await this.getMaterializer().recoverProtectedBackups(path);
     if (!(await this.canRecoverPathNow(path, captured))) {
       return;
     }

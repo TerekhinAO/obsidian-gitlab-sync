@@ -574,6 +574,24 @@ describe("LocalMaterializer", () => {
     expect(fixture.exists(backupPath)).toBe(false);
   });
 
+  it("handles a protected write in a folder that does not exist yet", async () => {
+    const fixture = materializer({});
+
+    const outcome = await fixture.materializer.applyProtectedBytes([{
+      type: "write",
+      path: "new/note.md",
+      bytes: bytes("remote"),
+      expectedBytes: null,
+    }]);
+
+    expect(outcome).toEqual([{
+      path: "new/note.md",
+      operation: "upsert",
+      applied: true,
+    }]);
+    expect(fixture.read("new/note.md")).toEqual(bytes("remote"));
+  });
+
   it("reports no recovery work when there is no pending transaction", async () => {
     const fixture = materializer({});
 

@@ -1048,6 +1048,7 @@ function managerFixture(options: {
         operation: "upsert" as const,
         applied: true,
       }))),
+    recoverProtectedBackups: vi.fn(async () => undefined),
     applyBytes: vi.fn(async () => undefined),
   };
   const streamingApplier = {

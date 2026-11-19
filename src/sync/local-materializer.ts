@@ -385,7 +385,7 @@ export class LocalMaterializer {
     }
   }
 
-  private async recoverProtectedBackups(path: string): Promise<void> {
+  async recoverProtectedBackups(path: string): Promise<void> {
     if (this.options.vault.adapter.rename === undefined) {
       return;
     }
@@ -412,6 +412,9 @@ export class LocalMaterializer {
     const directory = slash === -1 ? "" : path.slice(0, slash);
     const fileName = slash === -1 ? path : path.slice(slash + 1);
     const prefix = `${directory ? `${directory}/` : ""}.${fileName}.gitlab-gitless-sync-`;
+    if (directory !== "" && !(await this.options.vault.adapter.exists(directory))) {
+      return [];
+    }
     const { files } = await this.options.vault.adapter.list(directory);
     return files
       .filter((candidate) => candidate.startsWith(prefix) && candidate.endsWith(".tmp.backup"))

@@ -234,6 +234,7 @@ describe("GitLab sync integration", () => {
             operation: "upsert" as const,
             applied: true,
           })),
+        recoverProtectedBackups: async () => undefined,
       },
     });
 
@@ -728,6 +729,30 @@ describe("GitLab sync integration", () => {
     expect(setup.vault.text("note.md")).toBe("user delete edit");
     const state = await setup.store.load();
     expect(state.state.dirtyEntries["note.md"]).toMatchObject({ operation: "upsert" });
+  });
+
+  it("uses a restored interrupted backup as the expected local original", async () => {
+    const setup = await initializedFixture({ "note.md": "old" });
+    const localBaseSha = setup.server.head;
+    await setup.server.desktopCommit({
+      "note.md": "remote text",
+    }, `Sync vault from iPhone [sync-tx:restored-backup]`);
+    const acceptedSha = setup.server.head;
+    await seedUnconfirmed(setup, localBaseSha, "restored-backup");
+    const backupPath = ".note.md.gitlab-gitless-sync-2n9c.tmp.backup";
+    await setup.vault.remove("note.md");
+    await setup.vault.write(backupPath, "old");
+
+    const first = await setup.manager().sync("foreground");
+    expect(first).toMatchObject({ status: "success", commitSha: acceptedSha, recovered: true });
+    expect(setup.vault.text("note.md")).toBe("remote text");
+    expect(setup.vault.exists(backupPath)).toBe(false);
+    expect((await setup.store.load()).state.dirtyEntries).toEqual({});
+
+    const second = await setup.manager().sync("foreground");
+    expect(second.status).toBe("success");
+    expect(setup.server.commitActions).toEqual([]);
+    expect(setup.server.fileText("note.md")).toBe("remote text");
   });
 });
 
