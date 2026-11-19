@@ -598,7 +598,9 @@ export class SyncManager {
       const transactionId = this.newTransactionId();
       const message = this.commitMessage(input.trigger, input.settings, transactionId);
       const localContentFingerprints = await this.captureLocalFingerprints(
-        new Set(plan.actions.map((action) => action.file_path)),
+        plan.actions.map((action) => action.file_path),
+        trackedFiles,
+        localSnapshots,
       );
       await this.persistUnconfirmedCommit({
         transactionId,
@@ -921,13 +923,35 @@ export class SyncManager {
   }
 
   private async captureLocalFingerprints(
-    paths: Set<string>,
+    actionPaths: string[],
+    trackedFiles: Record<string, TrackedFile>,
+    localSnapshots: LocalSnapshotEntry[],
   ): Promise<Record<string, string | null>> {
     const fingerprints: Record<string, string | null> = {};
-    for (const path of paths) {
-      const bytes = await this.readOptionalLocalBytes(normalizePath(path));
-      fingerprints[normalizePath(path)] = await this.localFingerprint(bytes);
+
+    // Clean tracked files are represented by their Git blob id. This is the
+    // exact base the commit was planned against and is immune to later reads.
+    for (const [path, tracked] of Object.entries(trackedFiles)) {
+      fingerprints[normalizePath(path)] = tracked.blobId;
     }
+
+    // Dirty snapshots are the exact bytes supplied to the planner and POST.
+    // They override tracked blob ids even when an external edit landed after
+    // the snapshot was taken.
+    for (const snapshot of localSnapshots) {
+      const path = normalizePath(snapshot.path);
+      fingerprints[path] = await this.localFingerprint(snapshot.local.bytes);
+    }
+
+    // Untracked action targets (typically conflict copies) must not exist at
+    // transaction start; a file that appeared later is treated as divergence.
+    for (const path of actionPaths) {
+      const normalized = normalizePath(path);
+      if (fingerprints[normalized] === undefined) {
+        fingerprints[normalized] = null;
+      }
+    }
+
     return fingerprints;
   }
 
@@ -936,9 +960,13 @@ export class SyncManager {
     path: string,
     current: Uint8Array | null,
   ): Promise<boolean> {
-    const expected = intent.localContentFingerprints?.[normalizePath(path)];
-    if (expected === undefined) {
+    if (intent.localContentFingerprints === undefined) {
+      // Legacy intents predate fingerprints. Preserve their old recovery path.
       return true;
+    }
+    const expected = intent.localContentFingerprints[normalizePath(path)];
+    if (expected === undefined) {
+      return false;
     }
     return expected === await this.localFingerprint(current);
   }
@@ -948,25 +976,16 @@ export class SyncManager {
       return null;
     }
     if (globalThis.crypto?.subtle === undefined) {
-      // Deterministic fallback for unusual runtimes without WebCrypto.
-      let high = 0x2325;
-      let low = 0x84222325;
-      for (const byte of bytes) {
-        low ^= byte;
-        low = Math.imul(low, 0x0193) + 0x01b3;
-        high = Math.imul(high ^ byte, 0x01b3) + (low >>> 16);
-      }
-      return `fnv1a64:${(high >>> 0).toString(16)}${(low >>> 0)
-        .toString(16)
-        .padStart(8, "0")}`;
+      throw new Error("WebCrypto is required to protect recovery fingerprints");
     }
-    const digest = await globalThis.crypto.subtle.digest(
-      "SHA-256",
-      bytes.slice().buffer,
-    );
-    return `sha256:${[...new Uint8Array(digest)]
+    const header = new TextEncoder().encode(`blob ${bytes.byteLength}\0`);
+    const payload = new Uint8Array(header.byteLength + bytes.byteLength);
+    payload.set(header, 0);
+    payload.set(bytes, header.byteLength);
+    const digest = await globalThis.crypto.subtle.digest("SHA-1", payload);
+    return [...new Uint8Array(digest)]
       .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("")}`;
+      .join("");
   }
 
   private async readOptionalLocalBytes(path: string): Promise<Uint8Array | null> {

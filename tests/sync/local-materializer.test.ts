@@ -539,7 +539,7 @@ describe("LocalMaterializer", () => {
     expect(fixture.read("note.md")).toEqual(bytes("old"));
   });
 
-  it("does not rename the original to its backup path during protected replacement", async () => {
+  it("uses an atomic rename to the backup during protected replacement", async () => {
     const fixture = materializer({ initialFiles: { "note.md": bytes("old") } });
 
     const outcome = await fixture.materializer.applyProtectedBytes([{
@@ -553,11 +553,11 @@ describe("LocalMaterializer", () => {
     const backupPath = fixture.vault.adapter.rename.mock.calls.find(
       ([from]) => from === "note.md",
     )?.[1];
-    expect(backupPath).toBeUndefined();
+    expect(backupPath).toMatch(/\.note\.md\.gitlab-gitless-sync-.*\.tmp\.backup$/);
     expect(fixture.read("note.md")).toEqual(bytes("remote"));
   });
 
-  it("restores a good backup after a failed protected install leaves partial bytes", async () => {
+  it("preserves both partial install and backup when ownership is ambiguous", async () => {
     const fixture = materializer({ initialFiles: { "note.md": bytes("old") } });
     const create = fixture.vault.adapter.createBinary.getMockImplementation()!;
     fixture.vault.adapter.createBinary.mockImplementation(async (path: string, data: ArrayBuffer) => {
@@ -573,7 +573,10 @@ describe("LocalMaterializer", () => {
     }]);
 
     expect(outcome).toEqual([{ path: "note.md", operation: "upsert", applied: false }]);
-    expect(fixture.read("note.md")).toEqual(bytes("old"));
+    expect(fixture.read("note.md")).toEqual(bytes("re"));
+    const backups = await fixture.vault.adapter.list("");
+    expect(backups.files.some((path) => path.includes(".note.md.gitlab-gitless-sync-"))).toBe(true);
+    expect(fixture.read(backups.files.find((path) => path.includes(".note.md.gitlab-gitless-sync-"))!)).toEqual(bytes("old"));
   });
 
   it("restores an interrupted protected backup before retrying a path", async () => {

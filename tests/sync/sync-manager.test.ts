@@ -155,7 +155,13 @@ describe("SyncManager", () => {
       data: initializedData({ dirtyEntries: { "note.md": dirty("note.md") } }),
       localFiles: { "note.md": "pre-post" },
     });
-    fixture.planner.plan.mockResolvedValueOnce(localCommitPlan("remote-a", "note.md"));
+    fixture.planner.plan.mockImplementationOnce(async () => {
+      await fixture.vault.adapter.writeBinary(
+        "note.md",
+        new TextEncoder().encode("external edit").buffer,
+      );
+      return localCommitPlan("remote-a", "note.md");
+    });
     const observed: { state?: PluginData; message?: string } = {};
     fixture.gitlab.createCommit.mockImplementationOnce(async (...args: unknown[]) => {
       observed.state = await fixture.store.load();
@@ -180,7 +186,7 @@ describe("SyncManager", () => {
       branch: settings.branch,
     });
     expect(intent?.localContentFingerprints).toEqual({
-      "note.md": await localFingerprint("pre-post"),
+      "note.md": await localFingerprint("local"),
     });
 
     const finalState = await fixture.store.load();
@@ -438,7 +444,7 @@ describe("SyncManager", () => {
     const capturedEntry = dirty("note.md");
     const intent = unconfirmedCommit(settings, [capturedEntry]);
     intent.localContentFingerprints = {
-      "note.md": await localFingerprint("pre-post"),
+      "note.md": await localFingerprint("local"),
     };
     const fixture = managerFixture({
       data: initializedData({
@@ -1166,9 +1172,11 @@ function managerFixture(options: {
     plan: vi.fn(async () => remoteOnlyPlan("remote-a", [])),
   };
   const notices: string[] = [];
+  const vault = fakeVault(options.localFiles ?? {});
 
   return {
     events,
+    vault,
     store,
     journal,
     materializer,
@@ -1191,7 +1199,7 @@ function managerFixture(options: {
       createStreamingApplier: () => streamingApplier as unknown as StreamingRemoteApplier,
       materializer,
       journal,
-      vault: fakeVault(options.localFiles ?? {}),
+      vault,
       now: () => 1234,
       nowDate: () => new Date("2026-07-26T20:15:00+03:00"),
       notice: (message) => notices.push(message),
@@ -1224,6 +1232,9 @@ function fakeVault(files: Record<string, string>) {
         return { files: childFiles.sort(), folders: [...childFolders].sort() };
       },
       exists: async (path: string) => Object.prototype.hasOwnProperty.call(files, path),
+      writeBinary: async (path: string, data: ArrayBuffer) => {
+        files[path] = new TextDecoder().decode(data);
+      },
       readBinary: async (path: string) => new TextEncoder().encode(files[path]).buffer,
     },
   } as any;
@@ -1343,8 +1354,7 @@ function unconfirmedCommit(
 }
 
 async function localFingerprint(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return `sha256:${[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  return await gitBlobId(value);
 }
 
 function branch(sha: string, canPush: boolean): GitLabBranch {

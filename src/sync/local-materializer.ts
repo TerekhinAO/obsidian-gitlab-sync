@@ -200,13 +200,10 @@ export class LocalMaterializer {
       }
 
       if (current !== null) {
-        // Do not rename the original: Obsidian follows renames and would repoint
-        // bookmarks/links to the temporary backup, then lose them when it is deleted.
-        await this.options.vault.adapter.writeBinary(
-          backupPath,
-          arrayBufferFromBytes(current),
-        );
-        await this.options.vault.adapter.remove(normalized);
+        // A copy+remove sequence has a data-loss window if an external writer lands
+        // between those operations. The adapter rename is the closest available
+        // atomic move, so data safety takes priority over bookmark-link behavior.
+        await this.options.vault.adapter.rename(normalized, backupPath);
         movedOriginal = true;
         const moved = await this.readOptionalBytes(backupPath);
         if (!sameOptionalBytes(moved, expectedBytes)) {
@@ -387,7 +384,7 @@ export class LocalMaterializer {
     originalPath: string,
     backupPath: string,
     movedOriginal = true,
-    failedInstallBytes?: Uint8Array,
+    _failedInstallBytes?: Uint8Array,
   ): Promise<void> {
     if (!movedOriginal) {
       return;
@@ -395,25 +392,9 @@ export class LocalMaterializer {
     const originalExists = await this.options.vault.adapter.exists(originalPath);
     const backupExists = await this.options.vault.adapter.exists(backupPath);
     if (originalExists) {
-      if (failedInstallBytes !== undefined) {
-        const current = await this.readOptionalBytes(originalPath);
-        const partialInstall =
-          current !== null &&
-          failedInstallBytes.slice(0, current.byteLength).every(
-            (byte, index) => byte === current[index],
-          ) &&
-          current.byteLength <= failedInstallBytes.byteLength;
-        if (partialInstall) {
-          // This is our own partial install, not a concurrent user edit.
-          await this.removeIfExists(originalPath);
-          if (backupExists) {
-            await this.options.vault.adapter.rename?.(backupPath, originalPath);
-          }
-          return;
-        }
-      }
-      // A file at the original path is newer user output. Never replace it, and
-      // keep the intact backup so the previous content remains recoverable.
+      // A file at the original path may be a user write or our own partial
+      // install. Ownership cannot be proven atomically, so fail closed and keep
+      // both the existing file and the intact backup.
       return;
     }
     if (this.options.vault.adapter.rename === undefined) {

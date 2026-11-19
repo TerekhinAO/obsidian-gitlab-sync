@@ -291,7 +291,7 @@ describe("GitLab sync integration", () => {
     expect(result.status).toBe("success");
     expect((await setup.store.load()).state.lastSyncAt).toBe(123_456);
     expect(elapsedMs).toBeGreaterThanOrEqual(0);
-    expect(setup.vault.readBinaryPaths).toEqual(["notes/0042.md", "notes/0042.md"]);
+    expect(setup.vault.readBinaryPaths).toEqual(["notes/0042.md"]);
     expect(setup.journal.recorded).toEqual([]);
     expect(setup.server.requests.some((request) => request.url.includes("/repository/compare"))).toBe(true);
     expect(setup.server.requests.some((request) => request.url.includes("/repository/tree"))).toBe(false);
