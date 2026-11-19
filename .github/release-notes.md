@@ -15,3 +15,4 @@ Local test candidate: crash-safe and conflict-preserving mobile sync recovery.
 - Captures exact pre-POST content fingerprints and refuses recovery when local files changed while Obsidian was closed.
 - Preserves intact rollback backups when protected replacement ownership is ambiguous.
 - Retries transient conflict-copy recovery failures instead of allowing the next sync to delete the conflict copy.
+- Retries new-file recovery when another plugin creates or moves the target path during protected writes.
