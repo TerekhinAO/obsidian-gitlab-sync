@@ -61,6 +61,13 @@ export class StateStore {
   }
 
   async save(data: PluginData): Promise<void> {
+    const sanitized = this.sanitize(data);
+    const save = this.writeChain.then(() => this.plugin.saveData(sanitized));
+    this.writeChain = save.catch(() => undefined);
+    return save;
+  }
+
+  private sanitize(data: PluginData): PluginData {
     const sanitized: PluginData = {
       settings: {
         ...data.settings,
@@ -78,10 +85,7 @@ export class StateStore {
         schemaVersion: 3,
       },
     };
-
-    const save = this.writeChain.then(() => this.plugin.saveData(sanitized));
-    this.writeChain = save.catch(() => undefined);
-    return save;
+    return sanitized;
   }
 
   async update(mutator: (data: PluginData) => void | Promise<void>): Promise<PluginData> {
@@ -89,7 +93,7 @@ export class StateStore {
     const update = this.writeChain.then(async () => {
       updated = await this.loadUnlocked();
       await mutator(updated);
-      await this.plugin.saveData(updated);
+      await this.plugin.saveData(this.sanitize(updated));
     });
     this.writeChain = update.catch(() => undefined);
     await update;

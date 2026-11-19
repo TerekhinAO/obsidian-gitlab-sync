@@ -260,6 +260,20 @@ describe("StateStore", () => {
     expect(data.state.unconfirmedCommit).toEqual(unconfirmedCommit);
   });
 
+  it("rejects invalid settings in update before writing disk", async () => {
+    const fixture = fakePlugin();
+    const plugin = fixture.plugin;
+    const store = new StateStore(plugin);
+
+    await expect(store.update((data) => {
+      data.settings.gitlabBaseUrl = "";
+    })).rejects.toThrow("GitLab base URL must use HTTPS");
+
+    expect(fixture.savedData).toBeNull();
+    const data = await store.load();
+    expect(data.settings.gitlabBaseUrl).toBe("https://gitlab.com");
+  });
+
   it("round-trips a persisted remoteApply resume point", async () => {
     const { plugin } = fakePlugin();
     const store = new StateStore(plugin);
