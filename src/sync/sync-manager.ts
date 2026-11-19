@@ -876,6 +876,13 @@ export class SyncManager {
       expectedBytes: expected,
     }]);
     if (outcome === undefined || !outcome.applied) {
+      const afterFailedWrite = await this.readOptionalLocalBytes(path);
+      if (afterFailedWrite === null) {
+        // No user file appeared at this path. This is an infrastructure failure,
+        // not divergence; keep the durable intent and retry instead of letting
+        // the next normal sync interpret the missing conflict copy as deletion.
+        throw new Error(`Failed to recover GitLab file: ${path}`);
+      }
       await this.markRecoveryDivergence(path, "upsert", captured);
       return;
     }

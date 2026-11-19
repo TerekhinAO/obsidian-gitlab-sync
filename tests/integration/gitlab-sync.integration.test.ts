@@ -467,6 +467,44 @@ describe("GitLab sync integration", () => {
     expect(state.state.dirtyEntries).toEqual({});
   });
 
+  it("retries conflict-copy recovery after a transient mobile write failure instead of deleting it", async () => {
+    const setup = await initializedFixture({ "note.md": "base" });
+    const localBaseSha = setup.server.head;
+    await setup.server.desktopCommit({ "note.md": "remote text" });
+    const remoteBaseSha = setup.server.head;
+    await setup.writeDirty("note.md", "local text");
+    const conflictPath = `note — conflict iPhone ${conflictStamp}.md`;
+    await setup.server.desktopCommit({
+      [conflictPath]: "local text",
+    }, `Sync vault from iPhone [sync-tx:conflict-write-failure]`);
+    const acceptedSha = setup.server.head;
+    await seedUnconfirmed(setup, localBaseSha, "conflict-write-failure");
+    const originalCreateBinary = setup.vault.vault.createBinary.bind(setup.vault.vault);
+    let failOnce = true;
+    setup.vault.vault.createBinary = async (path: string, data: ArrayBuffer) => {
+      if (path === conflictPath && failOnce) {
+        failOnce = false;
+        throw new Error("mobile storage transient");
+      }
+      return await originalCreateBinary(path, data);
+    };
+
+    const failed = await setup.manager().sync("foreground");
+
+    expect(failed).toMatchObject({ status: "error" });
+    expect(setup.server.commitActions).toEqual([]);
+    const intentState = await setup.store.load();
+    expect(intentState.state.unconfirmedCommit?.transactionId).toBe("conflict-write-failure");
+
+    setup.vault.vault.createBinary = originalCreateBinary;
+    const retried = await setup.manager().sync("foreground");
+
+    expect(retried).toMatchObject({ status: "success", commitSha: acceptedSha, recovered: true });
+    expect(setup.server.commitActions).toEqual([]);
+    expect(setup.vault.text(conflictPath)).toBe("local text");
+    expect((await setup.store.load()).state.unconfirmedCommit).toBeNull();
+  });
+
   it("does not overwrite an edit made while recovery compares commits", async () => {
     const setup = await initializedFixture({ "note.md": "base" });
     const localBaseSha = setup.server.head;
