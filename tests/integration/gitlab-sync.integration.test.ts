@@ -291,7 +291,7 @@ describe("GitLab sync integration", () => {
     expect(result.status).toBe("success");
     expect((await setup.store.load()).state.lastSyncAt).toBe(123_456);
     expect(elapsedMs).toBeGreaterThanOrEqual(0);
-    expect(setup.vault.readBinaryPaths).toEqual(["notes/0042.md"]);
+    expect(setup.vault.readBinaryPaths).toEqual(["notes/0042.md", "notes/0042.md"]);
     expect(setup.journal.recorded).toEqual([]);
     expect(setup.server.requests.some((request) => request.url.includes("/repository/compare"))).toBe(true);
     expect(setup.server.requests.some((request) => request.url.includes("/repository/tree"))).toBe(false);
@@ -691,12 +691,12 @@ describe("GitLab sync integration", () => {
     const acceptedSha = setup.server.head;
     await seedUnconfirmed(setup, localBaseSha, "replace-race");
     const adapter = setup.vault.vault.adapter as any;
-    const originalRename = adapter.rename.bind(adapter);
-    adapter.rename = async (path: string, newPath: string) => {
-      if (path === "note.md" && newPath.includes(".backup")) {
+    const originalCreateBinary = setup.vault.vault.createBinary.bind(setup.vault.vault);
+    setup.vault.vault.createBinary = async (path: string, data: ArrayBuffer) => {
+      if (path === "note.md") {
         await setup.vault.write("note.md", "user replace edit");
       }
-      await originalRename(path, newPath);
+      await originalCreateBinary(path, data);
     };
 
     const result = await setup.manager().sync("foreground");
