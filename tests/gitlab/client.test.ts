@@ -164,7 +164,7 @@ describe("GitLabClient", () => {
       parent_ids: ["commit-1"],
     }]);
     expect(fake.calls[0].url).toBe(
-      "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/commits?ref_name=feature%2Fmobile&per_page=100&page=1",
+      "https://gitlab.com/api/v4/projects/developing1382536%2Fobsidian-vault/repository/commits?ref_name=feature%2Fmobile&per_page=100&page=1&order=topo",
     );
   });
 

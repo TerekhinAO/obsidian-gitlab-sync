@@ -179,7 +179,7 @@ export class GitLabClient {
 
   async listCommits(ref: string, page = "1"): Promise<GitLabCommitSummary[]> {
     return await this.requestJson<GitLabCommitSummary[]>(
-      `/repository/commits?ref_name=${encodeURIComponent(ref)}&per_page=100&page=${encodeURIComponent(page)}`,
+      `/repository/commits?ref_name=${encodeURIComponent(ref)}&per_page=100&page=${encodeURIComponent(page)}&order=topo`,
     );
   }
 
