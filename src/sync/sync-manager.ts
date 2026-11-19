@@ -884,13 +884,15 @@ export class SyncManager {
     }]);
     if (outcome === undefined || !outcome.applied) {
       const afterFailedWrite = await this.readOptionalLocalBytes(path);
-      if (expected === null) {
-        // This path was absent at recovery start. Any failure now is either an
-        // infrastructure error or another plugin racing us (for example Folder
-        // Notes). Record the racing bytes so only that exact race can be
-        // replaced on retry; a later user edit will produce a different
-        // fingerprint and remain protected.
-        await this.recordRecoveryRace(intent, path, afterFailedWrite);
+      const repeatedRecordedRace = await this.matchesRecoveryRace(intent, path, expected);
+      if (expected === null || repeatedRecordedRace) {
+        // A new path, or the same externally created race repeating on retry,
+        // must never advance recovery. For a first-time race, record its exact
+        // bytes so only that same race can be replaced later. A user edit made
+        // during the operation is not recorded and remains protected.
+        if (expected === null) {
+          await this.recordRecoveryRace(intent, path, afterFailedWrite);
+        }
         throw new Error(`Failed to recover GitLab file: ${path}`);
       }
       await this.markRecoveryDivergence(path, "upsert", captured);

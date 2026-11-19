@@ -546,6 +546,51 @@ describe("GitLab sync integration", () => {
     expect(setup.vault.text(conflictPath)).toBe("local text");
   });
 
+  it("keeps intent when a recorded recovery race repeats on retry", async () => {
+    const setup = await initializedFixture({ "note.md": "base" });
+    const localBaseSha = setup.server.head;
+    await setup.server.desktopCommit({ "note.md": "remote text" });
+    const remoteBaseSha = setup.server.head;
+    await setup.writeDirty("note.md", "local text");
+    const conflictPath = `note — conflict iPhone ${conflictStamp}.md`;
+    await setup.server.desktopCommit({
+      [conflictPath]: "local text",
+    }, `Sync vault from iPhone [sync-tx:repeated-plugin-race]`);
+    const acceptedSha = setup.server.head;
+    await seedUnconfirmed(setup, localBaseSha, "repeated-plugin-race", {
+      "note.md": await calculateGitBlobId(bytes("local text")),
+      [conflictPath]: null,
+    });
+    const originalCreateBinary = setup.vault.vault.createBinary.bind(setup.vault.vault);
+    let failures = 0;
+    setup.vault.vault.createBinary = async (path: string, data: ArrayBuffer) => {
+      if (path === conflictPath && failures < 2) {
+        failures += 1;
+        await setup.vault.write(path, "");
+        throw new Error("file already exists");
+      }
+      return await originalCreateBinary(path, data);
+    };
+
+    const first = await setup.manager().sync("foreground");
+    const second = await setup.manager().sync("foreground");
+
+    expect(first).toMatchObject({ status: "error" });
+    expect(second).toMatchObject({ status: "error" });
+    expect(failures).toBe(2);
+    expect(setup.server.commitActions).toEqual([]);
+    expect((await setup.store.load()).state.unconfirmedCommit?.transactionId)
+      .toBe("repeated-plugin-race");
+
+    setup.vault.vault.createBinary = originalCreateBinary;
+    const third = await setup.manager().sync("foreground");
+
+    expect(third).toMatchObject({ status: "success", commitSha: acceptedSha, recovered: true });
+    expect(setup.server.commitActions).toEqual([]);
+    expect(setup.vault.text(conflictPath)).toBe("local text");
+    expect((await setup.store.load()).state.unconfirmedCommit).toBeNull();
+  });
+
   it("does not replace a user edit that appears after a recorded plugin race", async () => {
     const setup = await initializedFixture({ "note.md": "base" });
     const localBaseSha = setup.server.head;
