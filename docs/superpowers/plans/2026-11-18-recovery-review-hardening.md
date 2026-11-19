@@ -52,3 +52,4 @@
 - [x] Move protected originals aside inside the materializer and restore them when a user edit lands during replacement or deletion.
 - [x] Install protected writes with no-overwrite `Vault.createBinary`, roll back backup failures, and recover interrupted backups on retry.
 - [x] Restore interrupted backups before the manager captures expected bytes, and treat a missing parent folder as having no backups.
+- [x] Suppress journal events around restoring interrupted protected backups.

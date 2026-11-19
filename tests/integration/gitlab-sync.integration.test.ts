@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GitLabClient } from "../../src/gitlab/client";
 import { GitLabRequestScheduler } from "../../src/gitlab/request-scheduler";
 import { BootstrapService } from "../../src/sync/bootstrap-service";
+import { ChangeJournal } from "../../src/sync/change-journal";
 import { SyncManager } from "../../src/sync/sync-manager";
 import { StateStore } from "../../src/sync/state-store";
 import type {
@@ -750,6 +751,58 @@ describe("GitLab sync integration", () => {
     expect((await setup.store.load()).state.dirtyEntries).toEqual({});
 
     const second = await setup.manager().sync("foreground");
+    expect(second.status).toBe("success");
+    expect(setup.server.commitActions).toEqual([]);
+    expect(setup.server.fileText("note.md")).toBe("remote text");
+  });
+
+  it("suppresses journal events from restoring an interrupted backup", async () => {
+    const setup = await initializedFixture({ "note.md": "old" });
+    const localBaseSha = setup.server.head;
+    await setup.server.desktopCommit({
+      "note.md": "remote text",
+    }, `Sync vault from iPhone [sync-tx:backup-event]`);
+    const acceptedSha = setup.server.head;
+    await seedUnconfirmed(setup, localBaseSha, "backup-event");
+    const backupPath = ".note.md.gitlab-gitless-sync-2n9c.tmp.backup";
+    await setup.vault.remove("note.md");
+    await setup.vault.write(backupPath, "old");
+
+    const listeners = new Map<string, Array<(file: any, oldPath?: string) => void>>();
+    (setup.vault.vault as any).on = (
+      name: string,
+      callback: (file: any, oldPath?: string) => void,
+    ) => {
+      const existing = listeners.get(name) ?? [];
+      existing.push(callback);
+      listeners.set(name, existing);
+      return { name };
+    };
+    const journal = new ChangeJournal({
+      vault: setup.vault.vault as any,
+      stateStore: setup.store,
+      now: () => 123_456,
+    });
+    journal.start();
+    const adapter = setup.vault.vault.adapter as any;
+    const originalRename = adapter.rename.bind(adapter);
+    adapter.rename = async (path: string, newPath: string) => {
+      await originalRename(path, newPath);
+      if (path === backupPath && newPath === "note.md") {
+        for (const callback of listeners.get("rename") ?? []) {
+          callback({ path: newPath }, path);
+        }
+      }
+    };
+
+    const first = await setup.manager({ journal }).sync("foreground");
+    const state = await setup.store.load();
+
+    expect(first).toMatchObject({ status: "success", commitSha: acceptedSha, recovered: true });
+    expect(setup.vault.text("note.md")).toBe("remote text");
+    expect(state.state.dirtyEntries).toEqual({});
+
+    const second = await setup.manager({ journal }).sync("foreground");
     expect(second.status).toBe("success");
     expect(setup.server.commitActions).toEqual([]);
     expect(setup.server.fileText("note.md")).toBe("remote text");

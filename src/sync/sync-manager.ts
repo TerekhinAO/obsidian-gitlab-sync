@@ -831,7 +831,7 @@ export class SyncManager {
     path: string,
     captured: DirtyEntry | undefined,
   ): Promise<void> {
-    await this.getMaterializer().recoverProtectedBackups(path);
+    await this.recoverProtectedBackupsQuietly(path);
     if (!(await this.canRecoverPathNow(path, captured))) {
       return;
     }
@@ -874,7 +874,7 @@ export class SyncManager {
     path: string,
     captured: DirtyEntry | undefined,
   ): Promise<void> {
-    await this.getMaterializer().recoverProtectedBackups(path);
+    await this.recoverProtectedBackupsQuietly(path);
     if (!(await this.canRecoverPathNow(path, captured))) {
       return;
     }
@@ -908,6 +908,12 @@ export class SyncManager {
       return null;
     }
     return new Uint8Array(await vault.adapter.readBinary(path));
+  }
+
+  private async recoverProtectedBackupsQuietly(path: string): Promise<void> {
+    await this.getJournal().suppress(async () => {
+      await this.getMaterializer().recoverProtectedBackups(path);
+    });
   }
 
   private async canRecoverPathNow(
