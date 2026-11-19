@@ -506,6 +506,45 @@ describe("GitLab sync integration", () => {
     expect((await setup.store.load()).state.unconfirmedCommit).toBeNull();
   });
 
+  it("recognizes an already recovered new file when retrying after another write fails", async () => {
+    const setup = await initializedFixture({ "base.md": "base" });
+    const localBaseSha = setup.server.head;
+    await setup.server.desktopCommit({
+      "a.md": "accepted a",
+      "b.md": "accepted b",
+    }, `Sync vault from iPhone [sync-tx:partial-new-files]`);
+    const acceptedSha = setup.server.head;
+    await seedUnconfirmed(setup, localBaseSha, "partial-new-files", {
+      "a.md": null,
+      "b.md": null,
+    });
+    const originalCreateBinary = setup.vault.vault.createBinary.bind(setup.vault.vault);
+    let failOnce = true;
+    setup.vault.vault.createBinary = async (path: string, data: ArrayBuffer) => {
+      if (path === "b.md" && failOnce) {
+        failOnce = false;
+        throw new Error("transient write failure");
+      }
+      return await originalCreateBinary(path, data);
+    };
+
+    const first = await setup.manager().sync("foreground");
+
+    expect(first).toMatchObject({ status: "error" });
+    expect(setup.vault.text("a.md")).toBe("accepted a");
+    expect((await setup.store.load()).state.unconfirmedCommit?.transactionId)
+      .toBe("partial-new-files");
+
+    setup.vault.vault.createBinary = originalCreateBinary;
+    const retried = await setup.manager().sync("foreground");
+
+    expect(retried).toMatchObject({ status: "success", commitSha: acceptedSha, recovered: true });
+    expect(setup.server.commitActions).toEqual([]);
+    expect(setup.vault.text("a.md")).toBe("accepted a");
+    expect(setup.vault.text("b.md")).toBe("accepted b");
+    expect((await setup.store.load()).state.unconfirmedCommit).toBeNull();
+  });
+
   it("blocks an externally created empty file at a new recovery path until it is removed", async () => {
     const setup = await initializedFixture({ "note.md": "base" });
     const localBaseSha = setup.server.head;

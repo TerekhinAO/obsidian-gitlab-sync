@@ -851,8 +851,19 @@ export class SyncManager {
     const fingerprintMatches = await this.matchesPrePostFingerprint(intent, path, expected);
     if (!fingerprintMatches) {
       if (expected !== null && intent.localContentFingerprints?.[normalizePath(path)] === null) {
-        // The path was absent before POST, but an unexplained file exists now.
-        // Keep the durable intent instead of letting a later sync overwrite it.
+        const recoveredBuffer = await client.getRawFile(path, remoteSha);
+        if (
+          recoveredBuffer !== null &&
+          sameOptionalBytes(expected, new Uint8Array(recoveredBuffer))
+        ) {
+          // A prior recovery attempt already installed this exact accepted
+          // commit content. Treat it as applied instead of blocking on our own
+          // partially completed recovery.
+          return;
+        }
+        // The path was absent before POST, but unexplained different bytes exist
+        // now. Keep the durable intent instead of letting a later sync
+        // overwrite the file.
         throw new Error(`Recovery diverged at new GitLab file: ${path}`);
       }
       await this.markRecoveryDivergence(path, "upsert", captured);
