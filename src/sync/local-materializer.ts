@@ -186,6 +186,7 @@ export class LocalMaterializer {
 
     await this.ensureParentFolders(normalized);
 
+    const installBytes = new Uint8Array(data.slice(0));
     const tempPath = this.tempSiblingPath(normalized);
     const backupPath = this.protectedBackupPath(normalized);
     let movedOriginal = false;
@@ -199,11 +200,22 @@ export class LocalMaterializer {
       }
 
       if (current !== null) {
-        await this.options.vault.adapter.rename(normalized, backupPath);
+        // Do not rename the original: Obsidian follows renames and would repoint
+        // bookmarks/links to the temporary backup, then lose them when it is deleted.
+        await this.options.vault.adapter.writeBinary(
+          backupPath,
+          arrayBufferFromBytes(current),
+        );
+        await this.options.vault.adapter.remove(normalized);
         movedOriginal = true;
         const moved = await this.readOptionalBytes(backupPath);
         if (!sameOptionalBytes(moved, expectedBytes)) {
-          await this.rollbackProtectedBackup(normalized, backupPath);
+          await this.rollbackProtectedBackup(
+            normalized,
+            backupPath,
+            true,
+            undefined,
+          );
           await this.removeIfExists(tempPath);
           return false;
         }
@@ -219,7 +231,18 @@ export class LocalMaterializer {
 
       // createBinary fails when another writer recreated the destination. Unlike
       // rename/writeBinary, it cannot silently replace a user's newer file.
-      await this.options.vault.createBinary(normalized, data);
+      try {
+        await this.options.vault.createBinary(normalized, data);
+      } catch (error) {
+        await this.rollbackProtectedBackup(
+          normalized,
+          backupPath,
+          movedOriginal,
+          installBytes,
+        );
+        await this.removeIfExists(tempPath);
+        return false;
+      }
       await this.removeIfExists(tempPath);
     } catch {
       await this.rollbackProtectedBackup(normalized, backupPath, movedOriginal);
@@ -364,6 +387,7 @@ export class LocalMaterializer {
     originalPath: string,
     backupPath: string,
     movedOriginal = true,
+    failedInstallBytes?: Uint8Array,
   ): Promise<void> {
     if (!movedOriginal) {
       return;
@@ -371,10 +395,25 @@ export class LocalMaterializer {
     const originalExists = await this.options.vault.adapter.exists(originalPath);
     const backupExists = await this.options.vault.adapter.exists(backupPath);
     if (originalExists) {
-      // A file at the original path is newer user/protected output; never replace it.
-      if (backupExists) {
-        await this.removeIfExists(backupPath);
+      if (failedInstallBytes !== undefined) {
+        const current = await this.readOptionalBytes(originalPath);
+        const partialInstall =
+          current !== null &&
+          failedInstallBytes.slice(0, current.byteLength).every(
+            (byte, index) => byte === current[index],
+          ) &&
+          current.byteLength <= failedInstallBytes.byteLength;
+        if (partialInstall) {
+          // This is our own partial install, not a concurrent user edit.
+          await this.removeIfExists(originalPath);
+          if (backupExists) {
+            await this.options.vault.adapter.rename?.(backupPath, originalPath);
+          }
+          return;
+        }
       }
+      // A file at the original path is newer user output. Never replace it, and
+      // keep the intact backup so the previous content remains recoverable.
       return;
     }
     if (this.options.vault.adapter.rename === undefined) {
