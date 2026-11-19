@@ -470,7 +470,12 @@ describe("LocalMaterializer", () => {
       expectedBytes: bytes("old"),
     }]);
 
-    expect(outcome).toEqual([{ path: "note.md", operation: "upsert", applied: false }]);
+    expect(outcome).toEqual([{
+      path: "note.md",
+      operation: "upsert",
+      applied: false,
+      failure: "expected-changed",
+    }]);
     expect(fixture.read("note.md")).toEqual(bytes("user edit"));
     expect(fixture.calls.map(([name]) => name)).not.toContain("rename");
   });
@@ -514,7 +519,12 @@ describe("LocalMaterializer", () => {
       expectedBytes: bytes("old"),
     }]);
 
-    expect(outcome).toEqual([{ path: "note.md", operation: "upsert", applied: false }]);
+    expect(outcome).toEqual([{
+      path: "note.md",
+      operation: "upsert",
+      applied: false,
+      failure: "install-failed",
+    }]);
     expect(fixture.read("note.md")).toEqual(bytes("final user edit"));
   });
 
@@ -535,7 +545,12 @@ describe("LocalMaterializer", () => {
       expectedBytes: bytes("old"),
     }]);
 
-    expect(outcome).toEqual([{ path: "note.md", operation: "upsert", applied: false }]);
+    expect(outcome).toEqual([{
+      path: "note.md",
+      operation: "upsert",
+      applied: false,
+      failure: "install-failed",
+    }]);
     expect(fixture.read("note.md")).toEqual(bytes("old"));
   });
 
@@ -572,7 +587,12 @@ describe("LocalMaterializer", () => {
       expectedBytes: bytes("old"),
     }]);
 
-    expect(outcome).toEqual([{ path: "note.md", operation: "upsert", applied: false }]);
+    expect(outcome).toEqual([{
+      path: "note.md",
+      operation: "upsert",
+      applied: false,
+      failure: "install-failed",
+    }]);
     expect(fixture.read("note.md")).toEqual(bytes("re"));
     const backups = await fixture.vault.adapter.list("");
     expect(backups.files.some((path) => path.includes(".note.md.gitlab-gitless-sync-"))).toBe(true);

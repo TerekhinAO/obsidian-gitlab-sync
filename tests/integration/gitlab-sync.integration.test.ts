@@ -506,7 +506,7 @@ describe("GitLab sync integration", () => {
     expect((await setup.store.load()).state.unconfirmedCommit).toBeNull();
   });
 
-  it("retries when another plugin creates an empty file at a new recovery path", async () => {
+  it("blocks an externally created empty file at a new recovery path until it is removed", async () => {
     const setup = await initializedFixture({ "note.md": "base" });
     const localBaseSha = setup.server.head;
     await setup.server.desktopCommit({ "note.md": "remote text" });
@@ -539,6 +539,11 @@ describe("GitLab sync integration", () => {
     expect((await setup.store.load()).state.unconfirmedCommit?.transactionId).toBe("plugin-race");
 
     setup.vault.vault.createBinary = originalCreateBinary;
+    const stillBlocked = await setup.manager().sync("foreground");
+    expect(stillBlocked).toMatchObject({ status: "error" });
+    expect(setup.vault.text(conflictPath)).toBe("");
+
+    await setup.vault.remove(conflictPath);
     const retried = await setup.manager().sync("foreground");
 
     expect(retried).toMatchObject({ status: "success", commitSha: acceptedSha, recovered: true });
@@ -546,7 +551,41 @@ describe("GitLab sync integration", () => {
     expect(setup.vault.text(conflictPath)).toBe("local text");
   });
 
-  it("keeps intent when a recorded recovery race repeats on retry", async () => {
+  it("keeps intent when an external file appears while recovery fetches remote bytes", async () => {
+    const setup = await initializedFixture({ "note.md": "base" });
+    const localBaseSha = setup.server.head;
+    await setup.server.desktopCommit({ "note.md": "remote text" });
+    const remoteBaseSha = setup.server.head;
+    await setup.writeDirty("note.md", "local text");
+    const conflictPath = `note — conflict iPhone ${conflictStamp}.md`;
+    await setup.server.desktopCommit({
+      [conflictPath]: "local text",
+    }, `Sync vault from iPhone [sync-tx:fetch-race]`);
+    await seedUnconfirmed(setup, localBaseSha, "fetch-race", {
+      [conflictPath]: null,
+    });
+    const originalRequest = setup.server.requestUrl.bind(setup.server);
+    let injected = false;
+    requestUrlMock.mockImplementation(async (options: any) => {
+      if (
+        !injected &&
+        options.url.includes(`/repository/files/${encodeURIComponent(conflictPath)}/raw?`)
+      ) {
+        injected = true;
+        await setup.vault.write(conflictPath, "external edit");
+      }
+      return await originalRequest(options);
+    });
+
+    const result = await setup.manager().sync("foreground");
+
+    expect(result).toMatchObject({ status: "error" });
+    expect(setup.vault.text(conflictPath)).toBe("external edit");
+    expect(setup.server.commitActions).toEqual([]);
+    expect((await setup.store.load()).state.unconfirmedCommit?.transactionId).toBe("fetch-race");
+  });
+
+  it("keeps intent when an external recovery race repeats on retry", async () => {
     const setup = await initializedFixture({ "note.md": "base" });
     const localBaseSha = setup.server.head;
     await setup.server.desktopCommit({ "note.md": "remote text" });
@@ -577,12 +616,13 @@ describe("GitLab sync integration", () => {
 
     expect(first).toMatchObject({ status: "error" });
     expect(second).toMatchObject({ status: "error" });
-    expect(failures).toBe(2);
+    expect(failures).toBe(1);
     expect(setup.server.commitActions).toEqual([]);
     expect((await setup.store.load()).state.unconfirmedCommit?.transactionId)
       .toBe("repeated-plugin-race");
 
     setup.vault.vault.createBinary = originalCreateBinary;
+    await setup.vault.remove(conflictPath);
     const third = await setup.manager().sync("foreground");
 
     expect(third).toMatchObject({ status: "success", commitSha: acceptedSha, recovered: true });
@@ -591,7 +631,41 @@ describe("GitLab sync integration", () => {
     expect((await setup.store.load()).state.unconfirmedCommit).toBeNull();
   });
 
-  it("does not replace a user edit that appears after a recorded plugin race", async () => {
+  it("does not replace a user file created before the protected write check", async () => {
+    const setup = await initializedFixture({ "note.md": "base" });
+    const localBaseSha = setup.server.head;
+    await setup.server.desktopCommit({ "note.md": "remote text" });
+    const remoteBaseSha = setup.server.head;
+    await setup.writeDirty("note.md", "local text");
+    const conflictPath = `note — conflict iPhone ${conflictStamp}.md`;
+    await setup.server.desktopCommit({
+      [conflictPath]: "local text",
+    }, `Sync vault from iPhone [sync-tx:first-write-user-edit]`);
+    await seedUnconfirmed(setup, localBaseSha, "first-write-user-edit", {
+      [conflictPath]: null,
+    });
+    const adapter = setup.vault.vault.adapter as any;
+    const originalWriteBinary = adapter.writeBinary.bind(adapter);
+    adapter.writeBinary = async (path: string, data: ArrayBuffer) => {
+      await originalWriteBinary(path, data);
+      if (path !== conflictPath && path.includes(".tmp")) {
+        await setup.vault.write(conflictPath, "user edit");
+      }
+    };
+
+    const first = await setup.manager().sync("foreground");
+    adapter.writeBinary = originalWriteBinary;
+    const second = await setup.manager().sync("foreground");
+
+    expect(first).toMatchObject({ status: "error" });
+    expect(second).toMatchObject({ status: "error" });
+    expect(setup.vault.text(conflictPath)).toBe("user edit");
+    expect(setup.server.commitActions).toEqual([]);
+    const intent = (await setup.store.load()).state.unconfirmedCommit;
+    expect(intent?.transactionId).toBe("first-write-user-edit");
+  });
+
+  it("does not replace a user edit that appears after a blocked recovery race", async () => {
     const setup = await initializedFixture({ "note.md": "base" });
     const localBaseSha = setup.server.head;
     await setup.server.desktopCommit({ "note.md": "remote text" });

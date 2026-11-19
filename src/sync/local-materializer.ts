@@ -7,6 +7,7 @@ import type {
   MaterializeOperation,
   PendingTransaction,
   ProtectedByteMaterializeOperation,
+  ProtectedMaterializeFailure,
   ProtectedMaterializeOutcome,
 } from "./types";
 
@@ -83,17 +84,23 @@ export class LocalMaterializer {
       for (const operation of operations) {
         await this.recoverProtectedBackups(operation.path);
         await this.assertMaterializable(operation.path);
-        const applied = operation.type === "write"
+        const result = operation.type === "write"
           ? await this.protectedWriteBytes(
               operation.path,
               arrayBufferFromBytes(operation.bytes),
               operation.expectedBytes,
             )
-          : await this.protectedDeleteBytes(operation.path, operation.expectedBytes);
+          : {
+              applied: await this.protectedDeleteBytes(
+                operation.path,
+                operation.expectedBytes,
+              ),
+            };
         outcomes.push({
           path: normalizePath(operation.path),
           operation: "upsert",
-          applied,
+          applied: result.applied,
+          ...(result.applied ? {} : { failure: result.failure }),
         });
       }
       await this.pruneEmptyParents(
@@ -173,15 +180,15 @@ export class LocalMaterializer {
     path: string,
     data: ArrayBuffer,
     expectedBytes: Uint8Array | null,
-  ): Promise<boolean> {
+  ): Promise<{ applied: boolean; failure?: ProtectedMaterializeFailure }> {
     const normalized = normalizePath(path);
     if (this.options.vault.adapter.rename === undefined) {
       // Without rename there is no way to preserve the original for rollback.
-      return false;
+      return { applied: false, failure: "unsupported" };
     }
     if (typeof this.options.vault.createBinary !== "function") {
       // writeBinary is not a no-overwrite installation primitive.
-      return false;
+      return { applied: false, failure: "unsupported" };
     }
 
     await this.ensureParentFolders(normalized);
@@ -196,7 +203,7 @@ export class LocalMaterializer {
       const current = await this.readOptionalBytes(normalized);
       if (!sameOptionalBytes(current, expectedBytes)) {
         await this.removeIfExists(tempPath);
-        return false;
+        return { applied: false, failure: "expected-changed" };
       }
 
       if (current !== null) {
@@ -214,7 +221,7 @@ export class LocalMaterializer {
             undefined,
           );
           await this.removeIfExists(tempPath);
-          return false;
+          return { applied: false, failure: "backup-invalid" };
         }
       }
 
@@ -223,7 +230,7 @@ export class LocalMaterializer {
           await this.removeIfExists(backupPath);
         }
         await this.removeIfExists(tempPath);
-        return false;
+        return { applied: false, failure: "target-appeared" };
       }
 
       // createBinary fails when another writer recreated the destination. Unlike
@@ -238,19 +245,19 @@ export class LocalMaterializer {
           installBytes,
         );
         await this.removeIfExists(tempPath);
-        return false;
+        return { applied: false, failure: "install-failed" };
       }
       await this.removeIfExists(tempPath);
     } catch {
       await this.rollbackProtectedBackup(normalized, backupPath, movedOriginal);
       await this.removeIfExists(tempPath);
-      return false;
+      return { applied: false, failure: "install-failed" };
     }
 
     if (movedOriginal) {
       await this.removeIfExists(backupPath);
     }
-    return true;
+    return { applied: true };
   }
 
   private async protectedDeleteBytes(

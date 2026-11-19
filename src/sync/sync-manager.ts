@@ -849,8 +849,7 @@ export class SyncManager {
 
     const expected = await this.readOptionalLocalBytes(path);
     const fingerprintMatches = await this.matchesPrePostFingerprint(intent, path, expected);
-    const raceMatches = await this.matchesRecoveryRace(intent, path, expected);
-    if (!fingerprintMatches && !raceMatches) {
+    if (!fingerprintMatches) {
       if (expected !== null && intent.localContentFingerprints?.[normalizePath(path)] === null) {
         // The path was absent before POST, but an unexplained file exists now.
         // Keep the durable intent instead of letting a later sync overwrite it.
@@ -862,6 +861,12 @@ export class SyncManager {
     const remoteBuffer = await client.getRawFile(path, remoteSha);
     const beforeWrite = await this.readOptionalLocalBytes(path);
     if (!sameOptionalBytes(expected, beforeWrite)) {
+      if (expected === null) {
+        // A new path appeared while its GitLab bytes were being fetched. Keep
+        // the durable intent rather than converting an unknown external file
+        // into a normal dirty change.
+        throw new Error(`Recovery diverged at new GitLab file: ${path}`);
+      }
       await this.markRecoveryDivergence(path, "upsert", captured);
       return;
     }
@@ -884,15 +889,11 @@ export class SyncManager {
     }]);
     if (outcome === undefined || !outcome.applied) {
       const afterFailedWrite = await this.readOptionalLocalBytes(path);
-      const repeatedRecordedRace = await this.matchesRecoveryRace(intent, path, expected);
-      if (expected === null || repeatedRecordedRace) {
-        // A new path, or the same externally created race repeating on retry,
-        // must never advance recovery. For a first-time race, record its exact
-        // bytes so only that same race can be replaced later. A user edit made
-        // during the operation is not recorded and remains protected.
-        if (expected === null) {
-          await this.recordRecoveryRace(intent, path, afterFailedWrite);
-        }
+      if (expected === null) {
+        // An external file appeared at a path that was absent before POST. Its
+        // creator cannot be proven safely (user and plugin events look alike),
+        // so never replace it. Keep the intent until the user moves or removes
+        // the blocking file; the GitLab copy remains recoverable.
         throw new Error(`Failed to recover GitLab file: ${path}`);
       }
       await this.markRecoveryDivergence(path, "upsert", captured);
@@ -972,35 +973,6 @@ export class SyncManager {
     }
 
     return fingerprints;
-  }
-
-  private async recordRecoveryRace(
-    intent: UnconfirmedCommit,
-    path: string,
-    bytes: Uint8Array | null,
-  ): Promise<void> {
-    const normalized = normalizePath(path);
-    const fingerprint = await this.localFingerprint(bytes);
-    await this.options.stateStore.update((data) => {
-      const current = data.state.unconfirmedCommit;
-      if (current?.transactionId !== intent.transactionId) {
-        return;
-      }
-      current.recoveryRaces ??= {};
-      current.recoveryRaces[normalized] = fingerprint;
-    });
-  }
-
-  private async matchesRecoveryRace(
-    intent: UnconfirmedCommit,
-    path: string,
-    current: Uint8Array | null,
-  ): Promise<boolean> {
-    const expected = intent.recoveryRaces?.[normalizePath(path)];
-    if (expected === undefined) {
-      return false;
-    }
-    return expected === await this.localFingerprint(current);
   }
 
   private async matchesPrePostFingerprint(

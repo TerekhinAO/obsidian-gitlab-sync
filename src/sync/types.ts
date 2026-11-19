@@ -70,10 +70,18 @@ export type ProtectedByteMaterializeOperation =
       expectedBytes: Uint8Array | null;
     };
 
+export type ProtectedMaterializeFailure =
+  | "unsupported"
+  | "expected-changed"
+  | "backup-invalid"
+  | "target-appeared"
+  | "install-failed";
+
 export interface ProtectedMaterializeOutcome {
   path: string;
   operation: DirtyOperation;
   applied: boolean;
+  failure?: ProtectedMaterializeFailure;
 }
 
 export interface PendingTransaction {
@@ -97,8 +105,6 @@ export interface UnconfirmedCommit {
   };
   capturedDirtyEntries?: DirtyEntry[];
   localContentFingerprints?: Record<string, string | null>;
-  /** Fingerprints of files that appeared during a failed protected recovery write. */
-  recoveryRaces?: Record<string, string | null>;
   createdAt: number;
 }
 
