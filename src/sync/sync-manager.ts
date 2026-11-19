@@ -597,6 +597,9 @@ export class SyncManager {
 
       const transactionId = this.newTransactionId();
       const message = this.commitMessage(input.trigger, input.settings, transactionId);
+      const localContentFingerprints = await this.captureLocalFingerprints(
+        new Set(plan.actions.map((action) => action.file_path)),
+      );
       await this.persistUnconfirmedCommit({
         transactionId,
         basedOnRemoteSha: remoteSha,
@@ -606,6 +609,7 @@ export class SyncManager {
           branch: input.settings.branch,
         },
         capturedDirtyEntries: plan.acknowledgedDirtyEntries?.map((entry) => ({ ...entry })),
+        localContentFingerprints,
         createdAt: this.now(),
       });
 
@@ -757,6 +761,7 @@ export class SyncManager {
 
     await this.applyRecoveredChangesSafely(
       client,
+      intent,
       remoteCommit.id,
       changes,
       captured,
@@ -791,6 +796,7 @@ export class SyncManager {
 
   private async applyRecoveredChangesSafely(
     client: GitLabClientLike,
+    intent: UnconfirmedCommit,
     remoteSha: string,
     changes: RemoteChange[],
     captured: Map<string, DirtyEntry>,
@@ -801,14 +807,15 @@ export class SyncManager {
 
     for (const change of changes) {
       if (change.type === "delete") {
-        await this.recoverDeleteSafely(change.path, captured.get(change.path));
+        await this.recoverDeleteSafely(intent, change.path, captured.get(change.path));
         continue;
       }
 
       if (change.type === "rename") {
-        await this.recoverDeleteSafely(change.oldPath, captured.get(change.oldPath));
+        await this.recoverDeleteSafely(intent, change.oldPath, captured.get(change.oldPath));
         await this.recoverWriteSafely(
           client,
+          intent,
           remoteSha,
           change.newPath,
           captured.get(change.newPath),
@@ -818,6 +825,7 @@ export class SyncManager {
 
       await this.recoverWriteSafely(
         client,
+        intent,
         remoteSha,
         change.path,
         captured.get(change.path),
@@ -827,6 +835,7 @@ export class SyncManager {
 
   private async recoverWriteSafely(
     client: GitLabClientLike,
+    intent: UnconfirmedCommit,
     remoteSha: string,
     path: string,
     captured: DirtyEntry | undefined,
@@ -837,6 +846,10 @@ export class SyncManager {
     }
 
     const expected = await this.readOptionalLocalBytes(path);
+    if (!(await this.matchesPrePostFingerprint(intent, path, expected))) {
+      await this.markRecoveryDivergence(path, "upsert", captured);
+      return;
+    }
     const remoteBuffer = await client.getRawFile(path, remoteSha);
     const beforeWrite = await this.readOptionalLocalBytes(path);
     if (!sameOptionalBytes(expected, beforeWrite)) {
@@ -849,7 +862,7 @@ export class SyncManager {
     }
 
     if (remoteBuffer === null) {
-      await this.recoverDeleteSafely(path, captured);
+      await this.recoverDeleteSafely(intent, path, captured);
       return;
     }
 
@@ -871,6 +884,7 @@ export class SyncManager {
   }
 
   private async recoverDeleteSafely(
+    intent: UnconfirmedCommit,
     path: string,
     captured: DirtyEntry | undefined,
   ): Promise<void> {
@@ -881,6 +895,10 @@ export class SyncManager {
 
     const expected = await this.readOptionalLocalBytes(path);
     if (!(await this.canRecoverPathNow(path, captured))) {
+      return;
+    }
+    if (!(await this.matchesPrePostFingerprint(intent, path, expected))) {
+      await this.markRecoveryDivergence(path, "upsert", captured);
       return;
     }
 
@@ -900,6 +918,55 @@ export class SyncManager {
     ) {
       await this.markRecoveryDivergence(path, "upsert", captured);
     }
+  }
+
+  private async captureLocalFingerprints(
+    paths: Set<string>,
+  ): Promise<Record<string, string | null>> {
+    const fingerprints: Record<string, string | null> = {};
+    for (const path of paths) {
+      const bytes = await this.readOptionalLocalBytes(normalizePath(path));
+      fingerprints[normalizePath(path)] = await this.localFingerprint(bytes);
+    }
+    return fingerprints;
+  }
+
+  private async matchesPrePostFingerprint(
+    intent: UnconfirmedCommit,
+    path: string,
+    current: Uint8Array | null,
+  ): Promise<boolean> {
+    const expected = intent.localContentFingerprints?.[normalizePath(path)];
+    if (expected === undefined) {
+      return true;
+    }
+    return expected === await this.localFingerprint(current);
+  }
+
+  private async localFingerprint(bytes: Uint8Array | null): Promise<string | null> {
+    if (bytes === null) {
+      return null;
+    }
+    if (globalThis.crypto?.subtle === undefined) {
+      // Deterministic fallback for unusual runtimes without WebCrypto.
+      let high = 0x2325;
+      let low = 0x84222325;
+      for (const byte of bytes) {
+        low ^= byte;
+        low = Math.imul(low, 0x0193) + 0x01b3;
+        high = Math.imul(high ^ byte, 0x01b3) + (low >>> 16);
+      }
+      return `fnv1a64:${(high >>> 0).toString(16)}${(low >>> 0)
+        .toString(16)
+        .padStart(8, "0")}`;
+    }
+    const digest = await globalThis.crypto.subtle.digest(
+      "SHA-256",
+      bytes.slice().buffer,
+    );
+    return `sha256:${[...new Uint8Array(digest)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("")}`;
   }
 
   private async readOptionalLocalBytes(path: string): Promise<Uint8Array | null> {

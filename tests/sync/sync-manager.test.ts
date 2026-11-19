@@ -153,6 +153,7 @@ describe("SyncManager", () => {
   it("persists a transaction intent before GitLab commit creation and clears it after confirmation", async () => {
     const fixture = managerFixture({
       data: initializedData({ dirtyEntries: { "note.md": dirty("note.md") } }),
+      localFiles: { "note.md": "pre-post" },
     });
     fixture.planner.plan.mockResolvedValueOnce(localCommitPlan("remote-a", "note.md"));
     const observed: { state?: PluginData; message?: string } = {};
@@ -177,6 +178,9 @@ describe("SyncManager", () => {
       baseUrl: settings.gitlabBaseUrl,
       projectPath: settings.projectPath,
       branch: settings.branch,
+    });
+    expect(intent?.localContentFingerprints).toEqual({
+      "note.md": await localFingerprint("pre-post"),
     });
 
     const finalState = await fixture.store.load();
@@ -427,6 +431,51 @@ describe("SyncManager", () => {
     expect(state.state.lastSyncedCommitSha).toBe("mobile-commit");
     expect(state.state.trackedFiles).toEqual({
       "note.md": { blobId: "blob-remote", mode: "100644", size: 0 },
+    });
+  });
+
+  it("preserves an external edit with an unchanged dirty revision using a pre-POST fingerprint", async () => {
+    const capturedEntry = dirty("note.md");
+    const intent = unconfirmedCommit(settings, [capturedEntry]);
+    intent.localContentFingerprints = {
+      "note.md": await localFingerprint("pre-post"),
+    };
+    const fixture = managerFixture({
+      data: initializedData({
+        dirtyEntries: { "note.md": capturedEntry },
+        unconfirmedCommit: intent,
+      }),
+      localFiles: { "note.md": "external edit" },
+      branchHeads: ["mobile-commit"],
+      remoteFiles: { "note.md": "remote" },
+      remoteTree: [{
+        id: "blob-remote",
+        name: "note.md",
+        type: "blob",
+        path: "note.md",
+        mode: "100644",
+      }],
+    });
+    fixture.gitlab.listCommits.mockResolvedValueOnce([
+      commitSummary("mobile-commit", "marker [sync-tx:sync-tx-1]", ["remote-a"]),
+    ]);
+    fixture.remoteDiff.discover.mockResolvedValueOnce({
+      changes: [{ type: "update", path: "note.md" }],
+      remoteTree: { "note.md": tracked("remote") },
+      usedFallback: false,
+    });
+
+    await expect(fixture.manager.sync("foreground")).resolves.toMatchObject({
+      status: "success",
+      commitSha: "mobile-commit",
+      recovered: true,
+    });
+
+    expect(fixture.materializer.applyProtectedBytes).not.toHaveBeenCalled();
+    const state = await fixture.store.load();
+    expect(state.state.dirtyEntries["note.md"]).toMatchObject({
+      path: "note.md",
+      operation: "upsert",
     });
   });
 
@@ -1291,6 +1340,11 @@ function unconfirmedCommit(
     capturedDirtyEntries,
     createdAt: 1,
   };
+}
+
+async function localFingerprint(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return `sha256:${[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
 function branch(sha: string, canPush: boolean): GitLabBranch {

@@ -96,6 +96,7 @@ export interface UnconfirmedCommit {
     branch: string;
   };
   capturedDirtyEntries?: DirtyEntry[];
+  localContentFingerprints?: Record<string, string | null>;
   createdAt: number;
 }
 
