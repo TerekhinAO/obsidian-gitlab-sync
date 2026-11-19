@@ -25,6 +25,6 @@ jobs:
         with:
           name: obsidian-plugin
           path: |
-            main.js
-            manifest.json
-            styles.css
+            dist/obsidian-plugin/gitlab-gitless-sync/main.js
+            dist/obsidian-plugin/gitlab-gitless-sync/manifest.json
+            dist/obsidian-plugin/gitlab-gitless-sync/styles.css

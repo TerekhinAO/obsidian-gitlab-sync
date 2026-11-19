@@ -285,8 +285,9 @@ and access token are required.
 ## Development
 
 - Install dependencies: `pnpm install`.
-- `pnpm build` type-checks (`tsc -noEmit -skipLibCheck`) and bundles the production plugin with
-  esbuild to `main.js`.
+- `pnpm build` type-checks (`tsc -noEmit -skipLibCheck`), bundles the production plugin with
+  esbuild to `main.js`, and copies the installable files to
+  `dist/obsidian-plugin/gitlab-gitless-sync/`.
 - `pnpm test` runs the Vitest suite.
 - `pnpm check` runs tests, type-check, lint, and build.
 - `main.js` and `dist/` are git-ignored build artifacts and are never committed.
