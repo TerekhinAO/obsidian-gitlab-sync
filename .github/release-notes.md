@@ -15,6 +15,5 @@ Local test candidate: crash-safe and conflict-preserving mobile sync recovery.
 - Captures exact pre-POST content fingerprints and refuses recovery when local files changed while Obsidian was closed.
 - Preserves intact rollback backups when protected replacement ownership is ambiguous.
 - Retries transient conflict-copy recovery failures instead of allowing the next sync to delete the conflict copy.
-- Retries new-file recovery when another plugin creates or moves the target path during protected writes.
-- Records and verifies exact race fingerprints before replacing a file created by another plugin during recovery retry.
-- Keeps recovery intent when a recorded plugin race repeats across multiple retries.
+- Fail closed when any unknown local file appears at a new recovery path; keep the GitLab copy recoverable until that file is moved or removed.
+- Report detailed protected-write failure reasons and keep recovery intent across repeated external races.
