@@ -50,3 +50,4 @@
 - [x] Cover accepted conflict commits and edits made during compare/download with production integration tests.
 - [x] Recheck each path's current dirty revision immediately before update, delete, and rename materialization.
 - [x] Move protected originals aside inside the materializer and restore them when a user edit lands during replacement or deletion.
+- [x] Install protected writes with no-overwrite `Vault.createBinary`, roll back backup failures, and recover interrupted backups on retry.

@@ -829,6 +829,7 @@ class MemoryVault {
   readonly listPaths: string[] = [];
   readonly vault = {
     configDir: ".obsidian",
+    createBinary: async (path: string, data: ArrayBuffer) => this.create(path, new Uint8Array(data)),
     adapter: {
       list: async (dir: string) => this.list(dir),
       exists: async (path: string) => this.exists(path),
@@ -870,6 +871,13 @@ class MemoryVault {
     const data = typeof content === "string" ? bytes(content) : content;
     this.files.set(path, new Uint8Array(data));
     this.addParentFolders(path);
+  }
+
+  private async create(path: string, data: Uint8Array): Promise<void> {
+    if (this.files.has(path)) {
+      throw new Error(`file already exists: ${path}`);
+    }
+    await this.write(path, data);
   }
 
   async remove(path: string): Promise<void> {

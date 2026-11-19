@@ -12,6 +12,7 @@ import type {
 
 interface MaterializerVault {
   configDir: string;
+  createBinary(path: string, data: ArrayBuffer): Promise<unknown>;
   adapter: {
     exists(path: string): Promise<boolean>;
     mkdir(path: string): Promise<void>;
@@ -80,6 +81,7 @@ export class LocalMaterializer {
     const outcomes: ProtectedMaterializeOutcome[] = [];
     await this.options.journal.suppress(async () => {
       for (const operation of operations) {
+        await this.recoverProtectedBackups(operation.path);
         await this.assertMaterializable(operation.path);
         const applied = operation.type === "write"
           ? await this.protectedWriteBytes(
@@ -173,50 +175,40 @@ export class LocalMaterializer {
     expectedBytes: Uint8Array | null,
   ): Promise<boolean> {
     const normalized = normalizePath(path);
+    if (this.options.vault.adapter.rename === undefined) {
+      // Without rename there is no way to preserve the original for rollback.
+      return false;
+    }
+    if (typeof this.options.vault.createBinary !== "function") {
+      // writeBinary is not a no-overwrite installation primitive.
+      return false;
+    }
+
     await this.ensureParentFolders(normalized);
 
-    if (this.options.vault.adapter.rename === undefined) {
-      // A direct write cannot fence a user edit between the precheck and write.
-      // Fail closed and leave the path dirty for the next safe resolution instead.
-      return false;
-    }
-
     const tempPath = this.tempSiblingPath(normalized);
-    await this.options.vault.adapter.writeBinary(tempPath, data);
-    const current = await this.readOptionalBytes(normalized);
-    if (!sameOptionalBytes(current, expectedBytes)) {
-      await this.removeIfExists(tempPath);
-      return false;
-    }
-
     const backupPath = this.protectedBackupPath(normalized);
     let movedOriginal = false;
-    if (current !== null) {
-      await this.options.vault.adapter.rename(normalized, backupPath);
-      movedOriginal = true;
-      const moved = await this.readOptionalBytes(backupPath);
-      if (!sameOptionalBytes(moved, expectedBytes)) {
-        if (!(await this.options.vault.adapter.exists(normalized))) {
-          await this.options.vault.adapter.rename(backupPath, normalized);
-        } else {
-          await this.removeIfExists(backupPath);
-        }
+
+    try {
+      await this.options.vault.adapter.writeBinary(tempPath, data);
+      const current = await this.readOptionalBytes(normalized);
+      if (!sameOptionalBytes(current, expectedBytes)) {
         await this.removeIfExists(tempPath);
         return false;
       }
-    }
 
-    if (await this.options.vault.adapter.exists(normalized)) {
-      if (movedOriginal) {
-        await this.removeIfExists(backupPath);
+      if (current !== null) {
+        await this.options.vault.adapter.rename(normalized, backupPath);
+        movedOriginal = true;
+        const moved = await this.readOptionalBytes(backupPath);
+        if (!sameOptionalBytes(moved, expectedBytes)) {
+          await this.rollbackProtectedBackup(normalized, backupPath);
+          await this.removeIfExists(tempPath);
+          return false;
+        }
       }
-      await this.removeIfExists(tempPath);
-      return false;
-    }
 
-    try {
-      await this.options.vault.adapter.rename(tempPath, normalized);
-    } catch {
       if (await this.options.vault.adapter.exists(normalized)) {
         if (movedOriginal) {
           await this.removeIfExists(backupPath);
@@ -224,8 +216,15 @@ export class LocalMaterializer {
         await this.removeIfExists(tempPath);
         return false;
       }
-      await this.options.vault.adapter.writeBinary(normalized, data);
+
+      // createBinary fails when another writer recreated the destination. Unlike
+      // rename/writeBinary, it cannot silently replace a user's newer file.
+      await this.options.vault.createBinary(normalized, data);
       await this.removeIfExists(tempPath);
+    } catch {
+      await this.rollbackProtectedBackup(normalized, backupPath, movedOriginal);
+      await this.removeIfExists(tempPath);
+      return false;
     }
 
     if (movedOriginal) {
@@ -239,36 +238,41 @@ export class LocalMaterializer {
     expectedBytes: Uint8Array | null,
   ): Promise<boolean> {
     const normalized = normalizePath(path);
-    const current = await this.readOptionalBytes(normalized);
-    if (!sameOptionalBytes(current, expectedBytes)) {
-      return false;
-    }
-    if (current === null) {
-      return true;
-    }
     if (this.options.vault.adapter.rename === undefined) {
       return false;
     }
 
+    let movedOriginal = false;
     const backupPath = this.protectedBackupPath(normalized);
-    await this.options.vault.adapter.rename(normalized, backupPath);
-    const moved = await this.readOptionalBytes(backupPath);
-    if (!sameOptionalBytes(moved, expectedBytes)) {
+
+    try {
+      const current = await this.readOptionalBytes(normalized);
+      if (!sameOptionalBytes(current, expectedBytes)) {
+        return false;
+      }
+      if (current === null) {
+        return true;
+      }
+
+      await this.options.vault.adapter.rename(normalized, backupPath);
+      movedOriginal = true;
+      const moved = await this.readOptionalBytes(backupPath);
+      if (!sameOptionalBytes(moved, expectedBytes)) {
+        await this.rollbackProtectedBackup(normalized, backupPath);
+        return false;
+      }
+
       if (await this.options.vault.adapter.exists(normalized)) {
         await this.removeIfExists(backupPath);
-      } else {
-        await this.options.vault.adapter.rename(backupPath, normalized);
+        return false;
       }
-      return false;
-    }
 
-    if (await this.options.vault.adapter.exists(normalized)) {
       await this.removeIfExists(backupPath);
+      return true;
+    } catch {
+      await this.rollbackProtectedBackup(normalized, backupPath, movedOriginal);
       return false;
     }
-
-    await this.removeIfExists(backupPath);
-    return true;
   }
 
   private async delete(path: string): Promise<void> {
@@ -354,6 +358,64 @@ export class LocalMaterializer {
     if (await this.options.vault.adapter.exists(path)) {
       await this.options.vault.adapter.remove(path);
     }
+  }
+
+  private async rollbackProtectedBackup(
+    originalPath: string,
+    backupPath: string,
+    movedOriginal = true,
+  ): Promise<void> {
+    if (!movedOriginal) {
+      return;
+    }
+    const originalExists = await this.options.vault.adapter.exists(originalPath);
+    const backupExists = await this.options.vault.adapter.exists(backupPath);
+    if (originalExists) {
+      // A file at the original path is newer user/protected output; never replace it.
+      if (backupExists) {
+        await this.removeIfExists(backupPath);
+      }
+      return;
+    }
+    if (this.options.vault.adapter.rename === undefined) {
+      return;
+    }
+    if (backupExists) {
+      await this.options.vault.adapter.rename(backupPath, originalPath);
+    }
+  }
+
+  private async recoverProtectedBackups(path: string): Promise<void> {
+    if (this.options.vault.adapter.rename === undefined) {
+      return;
+    }
+    const normalized = normalizePath(path);
+    const backups = await this.listProtectedBackups(normalized);
+    if (backups.length === 0) {
+      return;
+    }
+
+    if (!(await this.options.vault.adapter.exists(normalized))) {
+      await this.options.vault.adapter.rename(backups[backups.length - 1]!, normalized);
+    }
+
+    for (const backup of backups) {
+      // If the original already exists, it is either the completed protected
+      // result or a newer user write; in both cases that file wins and the
+      // rollback copy is no longer the authoritative version.
+      await this.removeIfExists(backup);
+    }
+  }
+
+  private async listProtectedBackups(path: string): Promise<string[]> {
+    const slash = path.lastIndexOf("/");
+    const directory = slash === -1 ? "" : path.slice(0, slash);
+    const fileName = slash === -1 ? path : path.slice(slash + 1);
+    const prefix = `${directory ? `${directory}/` : ""}.${fileName}.gitlab-gitless-sync-`;
+    const { files } = await this.options.vault.adapter.list(directory);
+    return files
+      .filter((candidate) => candidate.startsWith(prefix) && candidate.endsWith(".tmp.backup"))
+      .sort();
   }
 
   private async readOptionalBytes(path: string): Promise<Uint8Array | null> {

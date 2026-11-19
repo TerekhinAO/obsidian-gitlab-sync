@@ -70,6 +70,12 @@ function fakeVault(initialFiles: Record<string, Uint8Array> = {}) {
       folders.add(parent(path));
       files.set(path, new Uint8Array(data.slice(0)));
     }),
+    createBinary: vi.fn(async (path: string, data: ArrayBuffer) => {
+      if (files.has(path)) {
+        throw new Error(`file already exists: ${path}`);
+      }
+      files.set(path, new Uint8Array(data.slice(0)));
+    }),
     readBinary: vi.fn(async (path: string) => {
       const content = files.get(path);
       if (content === undefined) {
@@ -113,7 +119,11 @@ function fakeVault(initialFiles: Record<string, Uint8Array> = {}) {
   };
 
   return {
-    vault: { configDir: ".obsidian", adapter },
+    vault: {
+      configDir: ".obsidian",
+      adapter,
+      createBinary: adapter.createBinary,
+    },
     read(path: string) {
       return files.get(path);
     },
@@ -484,6 +494,84 @@ describe("LocalMaterializer", () => {
 
     expect(outcome).toEqual([{ path: "note.md", operation: "upsert", applied: false }]);
     expect(fixture.read("note.md")).toEqual(bytes("user edit"));
+  });
+
+  it("preserves a user write that lands at the final protected replacement", async () => {
+    const fixture = materializer({ initialFiles: { "note.md": bytes("old") } });
+    const write = fixture.vault.adapter.writeBinary.getMockImplementation()!;
+    const create = fixture.vault.adapter.createBinary.getMockImplementation()!;
+    fixture.vault.adapter.createBinary.mockImplementation(async (path: string, data: ArrayBuffer) => {
+      if (path === "note.md") {
+        await write("note.md", arrayBuffer(bytes("final user edit")));
+      }
+      await create(path, data);
+    });
+
+    const outcome = await fixture.materializer.applyProtectedBytes([{
+      type: "write",
+      path: "note.md",
+      bytes: bytes("remote"),
+      expectedBytes: bytes("old"),
+    }]);
+
+    expect(outcome).toEqual([{ path: "note.md", operation: "upsert", applied: false }]);
+    expect(fixture.read("note.md")).toEqual(bytes("final user edit"));
+  });
+
+  it("rolls a protected original back when reading its backup fails", async () => {
+    const fixture = materializer({ initialFiles: { "note.md": bytes("old") } });
+    const read = fixture.vault.adapter.readBinary.getMockImplementation()!;
+    fixture.vault.adapter.readBinary.mockImplementation(async (path: string) => {
+      if (path.includes(".backup")) {
+        throw new Error("backup read failed");
+      }
+      return await read(path);
+    });
+
+    const outcome = await fixture.materializer.applyProtectedBytes([{
+      type: "write",
+      path: "note.md",
+      bytes: bytes("remote"),
+      expectedBytes: bytes("old"),
+    }]);
+
+    expect(outcome).toEqual([{ path: "note.md", operation: "upsert", applied: false }]);
+    expect(fixture.read("note.md")).toEqual(bytes("old"));
+  });
+
+  it("restores an interrupted protected backup before retrying a path", async () => {
+    const backupPath = ".note.md.gitlab-gitless-sync-1234.tmp.backup";
+    const fixture = materializer({
+      initialFiles: { [backupPath]: bytes("interrupted original") },
+    });
+
+    const outcome = await fixture.materializer.applyProtectedBytes([{
+      type: "write",
+      path: "note.md",
+      bytes: bytes("remote"),
+      expectedBytes: bytes("interrupted original"),
+    }]);
+
+    expect(outcome).toEqual([{ path: "note.md", operation: "upsert", applied: true }]);
+    expect(fixture.read("note.md")).toEqual(bytes("remote"));
+    expect(fixture.exists(backupPath)).toBe(false);
+  });
+
+  it("restores an interrupted protected delete backup before retrying deletion", async () => {
+    const backupPath = ".note.md.gitlab-gitless-sync-1234.tmp.backup";
+    const fixture = materializer({
+      initialFiles: { [backupPath]: bytes("interrupted original") },
+    });
+
+    const outcome = await fixture.materializer.applyProtectedBytes([{
+      type: "delete",
+      path: "note.md",
+      expectedBytes: bytes("interrupted original"),
+    }]);
+
+    expect(outcome).toEqual([{ path: "note.md", operation: "upsert", applied: true }]);
+    expect(fixture.exists("note.md")).toBe(false);
+    expect(fixture.exists(backupPath)).toBe(false);
   });
 
   it("reports no recovery work when there is no pending transaction", async () => {
