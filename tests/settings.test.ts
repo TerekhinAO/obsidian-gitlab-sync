@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import Logger from "../src/logger";
+import { DEFAULT_SETTINGS } from "../src/settings/settings";
 import { StateStore } from "../src/sync/state-store";
 
 describe("GitLab settings persistence", () => {
@@ -65,6 +66,45 @@ describe("GitLab settings persistence", () => {
     expect(data.settings.allowSelfSignedCertificateForConnect).toBe(false);
     expect(data.settings.projectPath).toBe("group/project");
     expect(data.state.initialized).toBe(true);
+  });
+
+  it("defaults sync-after-edit to enabled with a four-second debounce", async () => {
+    expect(DEFAULT_SETTINGS.syncAfterEdit).toBe(true);
+    expect(DEFAULT_SETTINGS.syncAfterEditDebounceSeconds).toBe(4);
+
+    const omitted = new StateStore({
+      loadData: async () => ({
+        settings: {
+          gitlabBaseUrl: "https://gitlab.example.com",
+          projectPath: "group/project",
+          branch: "main",
+        },
+        state: {},
+      }),
+      saveData: async () => undefined,
+    });
+    expect((await omitted.load()).settings).toMatchObject({
+      syncAfterEdit: true,
+      syncAfterEditDebounceSeconds: 4,
+    });
+
+    const explicitOptOut = new StateStore({
+      loadData: async () => ({
+        settings: {
+          gitlabBaseUrl: "https://gitlab.example.com",
+          projectPath: "group/project",
+          branch: "main",
+          syncAfterEdit: false,
+          syncAfterEditDebounceSeconds: 60,
+        },
+        state: {},
+      }),
+      saveData: async () => undefined,
+    });
+    expect((await explicitOptOut.load()).settings).toMatchObject({
+      syncAfterEdit: false,
+      syncAfterEditDebounceSeconds: 60,
+    });
   });
 
   it("redacts credential-shaped fields from logs", async () => {
