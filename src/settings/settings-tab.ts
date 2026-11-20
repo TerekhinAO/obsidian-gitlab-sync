@@ -244,9 +244,9 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Sync on app foreground (mobile only)")
+      .setName("Sync on app foreground")
       .setDesc(
-        "Mobile only. Runs one sync when the app returns to the foreground (you reopen Obsidian). This is the reliable mobile replacement for \"Sync on startup\".",
+        "Run one sync when Obsidian becomes visible again — for example, when a desktop window is restored or the mobile app returns to the foreground. recommended as the reliable mobile lifecycle trigger.",
       )
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.syncOnForeground).onChange(async (value) => {
@@ -256,9 +256,9 @@ export default class GitLabSyncSettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Sync on app background (mobile only)")
+      .setName("Sync on app background")
       .setDesc(
-        "Mobile only. Runs one sync when the app is sent to the background (you leave Obsidian). Unstable — some devices suspend the app before the sync finishes.",
+        "Run one sync when Obsidian becomes hidden — for example, when a desktop window is hidden or the mobile app goes to the background. Unstable on mobile — some systems may suspend the app before it finishes.",
       )
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.syncOnBackground).onChange(async (value) => {

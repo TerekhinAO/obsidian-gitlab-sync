@@ -130,6 +130,28 @@ describe("settings tab render", () => {
     expect(toggle!.value).toBe(false);
   });
 
+  it("labels visibility syncs for both desktop and mobile", () => {
+    const container = renderTab(fakePlugin());
+    const names = container.toggles.map((toggle) => toggle.name);
+    const foreground = container.toggles.find(
+      (candidate) => candidate.name === "Sync on app foreground",
+    );
+    const background = container.toggles.find(
+      (candidate) => candidate.name === "Sync on app background",
+    );
+
+    expect(foreground).toBeDefined();
+    expect(background).toBeDefined();
+    expect(names).not.toContain("Sync on app foreground (mobile only)");
+    expect(names).not.toContain("Sync on app background (mobile only)");
+    expect(foreground!.description).toContain("desktop window is restored");
+    expect(foreground!.description).toContain("mobile app returns")
+    expect(foreground!.description).toContain("recommended");
+    expect(background!.description).toContain("desktop window is hidden");
+    expect(background!.description).toContain("mobile app goes to the background")
+    expect(background!.description).toContain("Unstable on mobile");
+  });
+
   it("persists the Connect self-signed certificate toggle", async () => {
     const plugin = fakePlugin();
     const container = renderTab(plugin);

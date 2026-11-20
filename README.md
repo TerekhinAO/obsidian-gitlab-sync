@@ -118,23 +118,25 @@ before the Connect button. It is a narrow escape hatch:
 All automatic modes live under **Settings → GitLab Gitless Sync → Sync** and are off-by-default
 except *Sync on startup*. Pick the set that matches the device.
 
-**On desktop — sync by time.** The desktop app stays open for hours, so time-based triggers are what
-keep it current:
+**On desktop — sync by time and visibility.** The desktop app stays open for hours, so time-based
+triggers keep it current; visibility triggers are also available when you restore or hide the window:
 
 - **Sync after edits** — on. Runs a sync a few seconds after you stop typing.
 - **Edit debounce (seconds)** — `8` is a good starting point; raise it if you get commits mid-thought.
 - **Sync on a timer** — on. Pulls in what other devices pushed while you were idle.
 - **Timer interval (minutes)** — `10` for an actively shared vault, `60` if you mostly write alone.
+- **Sync on app foreground** — optional on desktop. Runs when a hidden desktop window becomes visible again. Recommended on mobile.
+- **Sync on app background** — optional. Runs when the desktop window becomes hidden. Unstable on mobile.
 - **Sync on startup** — on. One sync when Obsidian launches.
 
 **On mobile — sync on app lifecycle.** iOS and Android suspend the app instead of leaving it
 running, so foreground/background transitions are the most reliable mobile sync triggers:
 
-- **Sync on app foreground (mobile only)** — on. Runs a sync when you reopen Obsidian from the
+- **Sync on app foreground** — recommended. Runs a sync when you reopen Obsidian from the
   background. This is the reliable mobile replacement for *Sync on startup*.
-- **Sync on app background (mobile only)** — optional. Runs a sync when you leave the app. It gets
+- **Sync on app background** — optional and unstable on mobile. Runs a sync when you leave the app. It gets
   your latest notes out sooner, but some devices suspend the app before the request finishes, so
-  treat it as best-effort rather than a guarantee.
+  treat it as unstable rather than a guarantee.
 - **Sync on startup** — on. Useful when Obsidian is launched cold; foreground sync still handles
   the more common reopen-from-background case.
 - **Sync on a timer** — off. A suspended app has no timer.
@@ -228,8 +230,8 @@ the wait. A later automatic or manual sync resumes normally on its own.
 | Setting | What it does |
 | --- | --- |
 | **Sync on startup** | One sync after Obsidian is ready. Desktop-oriented — on mobile the app is usually suspended before it runs. |
-| **Sync on app foreground** (mobile only) | One sync when you reopen the app. The reliable mobile trigger. |
-| **Sync on app background** (mobile only) | One sync when you leave the app. Best-effort: the OS may suspend the app first. |
+| **Sync on app foreground** | One sync when Obsidian becomes visible again — desktop window restore or mobile reopen. Recommended on mobile. |
+| **Sync on app background** | One sync when Obsidian becomes hidden. Unstable on mobile because the OS may suspend the app first. |
 | **Sync after edits** | One sync a few seconds after your last change, per **Edit debounce**. |
 | **Sync on a timer** | One sync every **Timer interval** minutes, to pull other devices' changes. |
 | **Manual** | *Sync with GitLab* — sidebar icon or command palette — runs the same engine on demand. |
