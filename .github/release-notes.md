@@ -15,8 +15,17 @@ This release substantially improves merge correctness, mobile crash recovery, an
 
 Folder Notes’ “Auto-create when creating notes” option may convert files created by other plugins into `Untitled/Untitled.md`. Sync now fails closed instead of overwriting such files. Disabling that Folder Notes option on mobile is recommended.
 
-## Upgrade
+## Updating
 
-Close Obsidian, replace `main.js`, `manifest.json`, and `styles.css`, and keep `data.json`. The plugin version should show `1.0.22`.
+### Obsidian Community Plugins
+
+If installed from the Community plugins directory, open **Settings → Community plugins →
+Check for updates**, then press **Update** next to **GitLab Gitless Sync**.
+
+### Manual update
+
+For the current GitHub-only distribution, close Obsidian and replace `main.js`,
+`manifest.json`, and `styles.css` in `<vault>/.obsidian/plugins/gitlab-gitless-sync/`,
+keeping `data.json`. The plugin version should show `1.0.22`.
 
 Verified with 294 automated tests, TypeScript checking, ESLint, and a production archive build.
