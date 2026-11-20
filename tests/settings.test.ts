@@ -68,8 +68,8 @@ describe("GitLab settings persistence", () => {
     expect(data.state.initialized).toBe(true);
   });
 
-  it("defaults sync-after-edit to enabled with a four-second debounce", async () => {
-    expect(DEFAULT_SETTINGS.syncAfterEdit).toBe(true);
+  it("keeps sync-after-edit opt-in with a four-second debounce", async () => {
+    expect(DEFAULT_SETTINGS.syncAfterEdit).toBe(false);
     expect(DEFAULT_SETTINGS.syncAfterEditDebounceSeconds).toBe(4);
 
     const omitted = new StateStore({
@@ -84,7 +84,7 @@ describe("GitLab settings persistence", () => {
       saveData: async () => undefined,
     });
     expect((await omitted.load()).settings).toMatchObject({
-      syncAfterEdit: true,
+      syncAfterEdit: false,
       syncAfterEditDebounceSeconds: 4,
     });
 

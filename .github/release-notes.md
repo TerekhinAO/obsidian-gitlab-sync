@@ -9,7 +9,6 @@ This release substantially improves merge correctness, mobile crash recovery, an
 - Protected user edits during recovery, including edits made while Obsidian was closed or while another plugin raced to create a file.
 - Fixed cases where conflict copies could be deleted or overwritten after a transient write failure.
 - Validated settings before saving and made state reset atomic with sync.
-- `Sync on edits` is now enabled by default with a 4-second debounce; existing explicit opt-outs are preserved.
 
 ## Folder Notes compatibility
 

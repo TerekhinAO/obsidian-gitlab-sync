@@ -12,7 +12,7 @@ export const DEFAULT_SETTINGS: GitLabSyncSettings = {
   syncOnStartup: true,
   syncOnForeground: true,
   syncOnBackground: false,
-  syncAfterEdit: true,
+  syncAfterEdit: false,
   syncAfterEditDebounceSeconds: 4,
   syncOnInterval: false,
   syncIntervalMinutes: 10,
