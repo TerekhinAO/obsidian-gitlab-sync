@@ -1,20 +1,22 @@
-Local test candidate: crash-safe and conflict-preserving mobile sync recovery.
+# GitLab Gitless Sync 1.0.22
 
-- Persists a content-less transaction intent before creating a GitLab commit.
-- Tags commits with a unique transaction id and recovers accepted commits from GitLab history without creating duplicates.
-- Recovers accepted commits from the actual local base and maintains an exact tracked index even when a local path is deliberately left dirty.
-- Protects user edits made during recovery compare, download, replacement, and deletion.
-- Rolls back and resumes interrupted protected backup operations.
-- Enables per-file optimistic locking through GitLab `last_commit_id`.
-- Prevents remote-only resume from advancing the base when a dirty path was skipped.
-- Makes conflict reports linear and memory-bounded while preserving safe three-way merge behavior.
-- Publishes the installable Obsidian bundle to `dist/obsidian-plugin/gitlab-gitless-sync/` on every build.
+This release substantially improves merge correctness, mobile crash recovery, and protection against silent data loss.
 
-- Validates settings before persisting updates so an empty GitLab URL cannot make the plugin unloadable.
-- Uses topological GitLab history ordering to avoid false transaction absence after merges.
-- Captures exact pre-POST content fingerprints and refuses recovery when local files changed while Obsidian was closed.
-- Preserves intact rollback backups when protected replacement ownership is ambiguous.
-- Retries transient conflict-copy recovery failures instead of allowing the next sync to delete the conflict copy.
-- Fail closed when any unknown local file appears at a new recovery path; keep the GitLab copy recoverable until that file is moved or removed.
-- Report detailed protected-write failure reasons and keep recovery intent across repeated external races.
-- Resume partial multi-file recovery when an already written path exactly matches the accepted GitLab commit.
+## Highlights
+
+- Reworked three-way auto-merge: overlapping edits become conflicts, context is preserved, duplicate insertions and reordered lines are fixed, and very large notes no longer crash sync.
+- Added crash-safe GitLab transaction recovery: interrupted mobile commits are identified by transaction markers, recovered from the accepted commit, and not duplicated.
+- Protected user edits during recovery, including edits made while Obsidian was closed or while another plugin raced to create a file.
+- Fixed cases where conflict copies could be deleted or overwritten after a transient write failure.
+- Validated settings before saving and made state reset atomic with sync.
+- `Sync on edits` is now enabled by default with a 4-second debounce; existing explicit opt-outs are preserved.
+
+## Folder Notes compatibility
+
+Folder Notes’ “Auto-create when creating notes” option may convert files created by other plugins into `Untitled/Untitled.md`. Sync now fails closed instead of overwriting such files. Disabling that Folder Notes option on mobile is recommended.
+
+## Upgrade
+
+Close Obsidian, replace `main.js`, `manifest.json`, and `styles.css`, and keep `data.json`. The plugin version should show `1.0.22`.
+
+Verified with 293 automated tests, TypeScript checking, ESLint, and a production archive build.
