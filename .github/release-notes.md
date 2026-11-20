@@ -1,15 +1,12 @@
-# GitLab Gitless Sync 1.0.22
+# GitLab Gitless Sync 1.0.23
 
-This release substantially improves merge correctness, mobile crash recovery, and protection against silent data loss.
+This release republishes the corrected `1.0.22` build through plugin update channels.
 
-## Highlights
+## What changed
 
-- Reworked three-way auto-merge: overlapping edits become conflicts, context is preserved, duplicate insertions and reordered lines are fixed, and very large notes no longer crash sync.
-- Added crash-safe GitLab transaction recovery: interrupted mobile commits are identified by transaction markers, recovered from the accepted commit, and not duplicated.
-- Protected user edits during recovery, including edits made while Obsidian was closed or while another plugin raced to create a file.
-- Fixed cases where conflict copies could be deleted or overwritten after a transient write failure.
-- Validated settings before saving and made state reset atomic with sync.
-- Clarified lifecycle settings: visibility triggers work on desktop and mobile; foreground is recommended on mobile, while background is unstable on mobile.
+- Corrects the release distribution bundle so updates no longer receive the stale lifecycle-setting labels.
+- Makes release publishing idempotent: retrying a tag now replaces its existing release assets instead of leaving old files behind.
+- Keeps the `1.0.22` sync, merge, recovery, and data-protection fixes.
 
 ## Folder Notes compatibility
 
@@ -26,6 +23,6 @@ Check for updates**, then press **Update** next to **GitLab Gitless Sync**.
 
 For the current GitHub-only distribution, close Obsidian and replace `main.js`,
 `manifest.json`, and `styles.css` in `<vault>/.obsidian/plugins/gitlab-gitless-sync/`,
-keeping `data.json`. The plugin version should show `1.0.22`.
+keeping `data.json`. The plugin version should show `1.0.23`.
 
-Verified with 294 automated tests, TypeScript checking, ESLint, and a production archive build.
+Verified with 295 automated tests, TypeScript checking, ESLint, and a production archive build.
